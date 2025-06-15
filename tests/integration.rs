@@ -2,8 +2,7 @@
 
 use std::time::Duration;
 use streamweld::prelude::*;
-use streamweld::traits::{ConsumerExt, ProducerExt};
-use tokio::time::timeout;
+use streamweld::traits::ProducerExt;
 
 #[tokio::test]
 async fn test_basic_pipeline() {

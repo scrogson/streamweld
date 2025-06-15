@@ -1,13 +1,11 @@
 //! Concrete consumer implementations.
 
 use async_trait::async_trait;
-use futures::Future;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::sleep;
 
@@ -305,7 +303,8 @@ impl<C> ThroughputConsumer<C> {
             let total_rate = self.count as f64 / total_elapsed.as_secs_f64();
 
             if let Some(last_report) = self.last_report {
-                let interval_elapsed = now.duration_since(last_report);
+                // TODO: use this
+                let _interval_elapsed = now.duration_since(last_report);
                 println!(
                     "Throughput: {:.2} items/sec (total: {} items in {:.2}s)",
                     total_rate,

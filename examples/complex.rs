@@ -3,7 +3,6 @@
 //! Run with: cargo run --example complex_pipeline
 
 use std::time::Duration;
-use streamweld::pipeline::PipelineStage;
 use streamweld::prelude::*;
 use tokio::time::sleep;
 

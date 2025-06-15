@@ -5,8 +5,6 @@
 
 use crate::error::Result;
 use async_trait::async_trait;
-use std::future::Future;
-use std::pin::Pin;
 
 /// A producer generates items on demand.
 ///

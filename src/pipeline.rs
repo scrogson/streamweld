@@ -6,7 +6,6 @@
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 
 use crate::error::{Error, Result};
 use crate::traits::{Consumer, Processor, Producer};
@@ -97,7 +96,7 @@ where
     {
         let Pipeline {
             stage: mut producer,
-            processor: mut processor,
+            mut processor,
             config,
         } = self;
         let fail_fast = config.fail_fast;

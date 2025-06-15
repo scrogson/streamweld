@@ -3,7 +3,6 @@
 use crate::error::Result;
 use crate::traits::{Chain, Consumer, Contramap, Filter, Map, Producer, Take};
 use async_trait::async_trait;
-use std::marker::PhantomData;
 
 // Map combinator implementation
 #[async_trait]
@@ -118,7 +117,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::impls::consumers::*;
+    
     use crate::impls::producers::*;
     use crate::traits::ProducerExt;
 

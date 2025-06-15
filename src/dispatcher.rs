@@ -3,14 +3,14 @@
 //! Dispatchers are inspired by Elixir's GenStage dispatchers and control how events
 //! are routed from a single producer to multiple consumers.
 
-use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::error::{Error, Result};
-use crate::traits::{Consumer, Producer};
+use crate::error::Result;
+use crate::traits::Consumer;
 
 /// Configuration for dispatcher behavior
 pub struct DispatcherConfig {
@@ -318,7 +318,7 @@ where
         &self,
         events: Vec<T>,
         consumers: &HashMap<ConsumerId, ConsumerHandle<T>>,
-        partitions: &[String],
+        _partitions: &[String],
         hash_fn: &Arc<dyn Fn(&T) -> String + Send + Sync>,
     ) -> Result<()> {
         // Group consumers by partition

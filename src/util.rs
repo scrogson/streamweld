@@ -443,12 +443,15 @@ pub mod metrics {
 
 pub struct StreamWithTimeout<S> {
     stream: S,
-    timeout: std::time::Duration,
+    _timeout: std::time::Duration,
 }
 
 impl<S> StreamWithTimeout<S> {
     pub fn new(stream: S, timeout: std::time::Duration) -> Self {
-        Self { stream, timeout }
+        Self {
+            stream,
+            _timeout: timeout,
+        }
     }
 }
 
@@ -493,7 +496,7 @@ where
 pub async fn stream_into_vec_with_timeout_and_channel<S, T>(
     stream: S,
     timeout: std::time::Duration,
-    channel: mpsc::Sender<T>,
+    _channel: mpsc::Sender<T>,
 ) -> Vec<S::Item>
 where
     S: Stream + Send + Sync + Unpin,

@@ -365,7 +365,7 @@ impl<T: Send + 'static> Processor for BufferProcessor<T> {
 
 /// A processor that applies rate limiting
 pub struct RateLimitProcessor<T> {
-    max_rate: u64,
+    _max_rate: u64,
     min_interval: Duration,
     last_processed: Option<Instant>,
     _phantom: std::marker::PhantomData<T>,
@@ -376,7 +376,7 @@ impl<T> RateLimitProcessor<T> {
     pub fn new(max_rate_per_second: u64) -> Self {
         let min_interval = Duration::from_nanos(1_000_000_000 / max_rate_per_second);
         Self {
-            max_rate: max_rate_per_second,
+            _max_rate: max_rate_per_second,
             min_interval,
             last_processed: None,
             _phantom: std::marker::PhantomData,
