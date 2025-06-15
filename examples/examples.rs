@@ -2,20 +2,21 @@
 
 use std::time::Duration;
 use streamweld::prelude::*;
-use streamweld::util::{consumer_from_fn, from_fn, processor_from_fn};
+use streamweld::util::sink_from_fn;
+use streamweld::util::{from_fn, processor_from_fn};
 use streamweld::Result;
 use tokio::time::sleep;
 
-/// Example 1: Basic pipeline with range producer and print consumer
+/// Example 1: Basic pipeline with range source and print sink
 pub async fn basic_pipeline_example() -> Result<()> {
     println!("=== Basic Pipeline Example ===");
 
-    let producer = RangeProducer::new(1..11);
-    let consumer = PrintConsumer::<i64>::with_prefix("Item".to_string());
+    let source = RangeSource::new(1..11);
+    let sink = PrintSink::<i64>::with_prefix("Item".to_string());
 
-    let pipeline = Pipeline::new(producer, NoOpProcessor::<i64>::new()).buffer_size(5);
+    let pipeline = Pipeline::new(source, NoOpProcessor::<i64>::new()).buffer_size(5);
 
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
 
     println!("Basic pipeline completed!\n");
     Ok(())
@@ -25,13 +26,13 @@ pub async fn basic_pipeline_example() -> Result<()> {
 pub async fn processing_pipeline_example() -> Result<()> {
     println!("=== Processing Pipeline Example ===");
 
-    let producer = RangeProducer::new(1..11);
+    let source = RangeSource::new(1..11);
     let processor = MapProcessor::new(|x| x * 2);
-    let consumer = PrintConsumer::<i64>::with_prefix("Doubled".to_string());
+    let sink = PrintSink::<i64>::with_prefix("Doubled".to_string());
 
-    let pipeline = Pipeline::new(producer, processor).buffer_size(5);
+    let pipeline = Pipeline::new(source, processor).buffer_size(5);
 
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
 
     println!("Processing pipeline completed!\n");
     Ok(())
@@ -83,11 +84,11 @@ impl streamweld::traits::Processor for MultiStageProcessor {
     }
 }
 
-/// Debug consumer for Vec<i64>
-struct DebugPrintConsumer;
+/// Debug sink for Vec<i64>
+struct DebugPrintSink;
 
 #[async_trait::async_trait]
-impl streamweld::traits::Consumer for DebugPrintConsumer {
+impl streamweld::traits::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -104,13 +105,13 @@ impl streamweld::traits::Consumer for DebugPrintConsumer {
 pub async fn complex_pipeline_example() -> Result<()> {
     println!("=== Complex Pipeline Example ===");
 
-    let producer = RangeProducer::new(1..21);
+    let _source = RangeSource::new(1..21);
     let processor = MultiStageProcessor::new(3);
-    let consumer = DebugPrintConsumer;
+    let sink = DebugPrintSink;
 
-    let pipeline = Pipeline::new(producer, processor).buffer_size(10);
+    let pipeline = Pipeline::new(_source, processor).buffer_size(10);
 
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
 
     println!("Complex pipeline completed!\n");
     Ok(())
@@ -120,14 +121,14 @@ pub async fn complex_pipeline_example() -> Result<()> {
 pub async fn fibonacci_rate_limited_example() -> Result<()> {
     println!("=== Fibonacci Rate Limited Example ===");
 
-    let producer = FibonacciProducer::with_limit(10);
+    let source = FibonacciSource::with_limit(10);
     let rate_limiter = RateLimitProcessor::new(2); // 2 per second
-    let consumer = PrintConsumer::<u64>::with_prefix("Fib".to_string());
+    let sink = PrintSink::<u64>::with_prefix("Fib".to_string());
 
-    let pipeline = Pipeline::new(producer, rate_limiter).operation_timeout(Duration::from_secs(1));
+    let pipeline = Pipeline::new(source, rate_limiter).operation_timeout(Duration::from_secs(1));
 
     let start = std::time::Instant::now();
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
     let elapsed = start.elapsed();
 
     println!(
@@ -141,12 +142,12 @@ pub async fn fibonacci_rate_limited_example() -> Result<()> {
 pub async fn concurrent_collection_example() -> Result<()> {
     println!("=== Concurrent Collection Example ===");
 
-    let producer = RangeProducer::new(1..101);
-    let collector = CollectConsumer::new();
+    let source = RangeSource::new(1..101);
+    let collector = CollectSink::new();
     let collector_ref = collector.clone();
 
     // Use builder pattern for config
-    let pipeline = ConcurrentPipeline::new(producer, collector)
+    let pipeline = ConcurrentPipeline::new(source, collector)
         .buffer_size(20)
         .max_concurrency(4);
 
@@ -168,8 +169,8 @@ pub async fn concurrent_collection_example() -> Result<()> {
 pub async fn error_handling_example() -> Result<()> {
     println!("=== Error Handling Example ===");
 
-    // Create a producer that sometimes fails
-    let producer = from_fn(|| async {
+    // Create a source that sometimes fails
+    let source = from_fn(|| async {
         static mut COUNTER: i32 = 0;
         unsafe {
             COUNTER += 1;
@@ -188,7 +189,7 @@ pub async fn error_handling_example() -> Result<()> {
     let error_handler =
         ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Value: {}", x)));
 
-    let consumer = consumer_from_fn(|result: Result<String>| async move {
+    let sink = sink_from_fn(|result: Result<String>| async move {
         match result {
             Ok(value) => println!("✓ {}", value),
             Err(e) => println!("✗ Error: {}", e),
@@ -196,39 +197,35 @@ pub async fn error_handling_example() -> Result<()> {
         Ok(())
     });
 
-    let pipeline = Pipeline::new(producer, error_handler).fail_fast(false); // Continue on errors
+    let pipeline = Pipeline::new(source, error_handler).fail_fast(false); // Continue on errors
 
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
 
     println!("Error handling example completed!\n");
     Ok(())
 }
 
-/// Example 7: Fan-out pattern with multiple consumers
+/// Example 7: Fan-out pattern with multiple sinks
 pub async fn fan_out_example() -> Result<()> {
     println!("=== Fan-out Example ===");
 
-    let producer = RangeProducer::new(1..21);
-
-    // Create multiple consumers
-    let consumer1 = PrintConsumer::<i64>::with_prefix("Consumer-1".to_string());
-    let consumer2 = PrintConsumer::<i64>::with_prefix("Consumer-2".to_string());
-    let consumer3 = CountConsumer::new();
-    let counter_ref = consumer3.clone();
+    // Create multiple sinks
+    let sink3 = CountSink::new();
+    let counter_ref = sink3.clone();
 
     // Simple fan-out using multiple pipelines (for demonstration)
-    let producer1 = RangeProducer::new(1..6);
-    let producer2 = RangeProducer::new(6..11);
-    let producer3 = RangeProducer::new(11..16);
+    let source1 = RangeSource::new(1..6);
+    let source2 = RangeSource::new(6..11);
+    let source3 = RangeSource::new(11..16);
 
-    let pipeline1 = Pipeline::new(producer1, NoOpProcessor::<i64>::new());
-    let pipeline2 = Pipeline::new(producer2, NoOpProcessor::<i64>::new());
-    let pipeline3 = Pipeline::new(producer3, NoOpProcessor::<i64>::new());
+    let pipeline1 = Pipeline::new(source1, NoOpProcessor::<i64>::new());
+    let pipeline2 = Pipeline::new(source2, NoOpProcessor::<i64>::new());
+    let pipeline3 = Pipeline::new(source3, NoOpProcessor::<i64>::new());
 
     // Run pipelines concurrently
     let results = tokio::try_join!(
-        pipeline1.sink(PrintConsumer::<i64>::with_prefix("Pipeline-1".to_string())),
-        pipeline2.sink(PrintConsumer::<i64>::with_prefix("Pipeline-2".to_string())),
+        pipeline1.sink(PrintSink::<i64>::with_prefix("Pipeline-1".to_string())),
+        pipeline2.sink(PrintSink::<i64>::with_prefix("Pipeline-2".to_string())),
         pipeline3.sink(counter_ref),
     );
 
@@ -252,14 +249,13 @@ pub async fn async_processor_example() -> Result<()> {
         Ok(vec![result])
     });
 
-    let producer = RangeProducer::new(1..11);
-    let consumer = PrintConsumer::<String>::with_prefix("Async".to_string());
+    let source = RangeSource::new(1..11);
+    let sink = PrintSink::<String>::with_prefix("Async".to_string());
 
-    let pipeline =
-        Pipeline::new(producer, async_processor).operation_timeout(Duration::from_secs(5));
+    let pipeline = Pipeline::new(source, async_processor).operation_timeout(Duration::from_secs(5));
 
     let start = std::time::Instant::now();
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
     let elapsed = start.elapsed();
 
     println!(
@@ -273,15 +269,15 @@ pub async fn async_processor_example() -> Result<()> {
 pub async fn throughput_measurement_example() -> Result<()> {
     println!("=== Throughput Measurement Example ===");
 
-    let producer = RangeProducer::new(1..1001);
-    let consumer = ThroughputConsumer::new(
-        CountConsumer::new(),
+    let source = RangeSource::new(1..1001);
+    let sink = ThroughputSink::new(
+        CountSink::new(),
         Duration::from_millis(500), // Report every 500ms
     );
 
-    let pipeline = Pipeline::new(producer, NoOpProcessor::<i64>::new()).buffer_size(100);
+    let pipeline = Pipeline::new(source, NoOpProcessor::<i64>::new()).buffer_size(100);
 
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
 
     println!("Throughput measurement completed!\n");
     Ok(())
@@ -291,37 +287,37 @@ pub async fn throughput_measurement_example() -> Result<()> {
 pub async fn buffering_batching_example() -> Result<()> {
     println!("=== Buffering and Batching Example ===");
 
-    // Create a producer with irregular timing
-    let producer = IntervalProducer::new(RangeProducer::new(1..21), Duration::from_millis(50));
+    // Create a source with irregular timing
+    let source = IntervalSource::new(RangeSource::new(1..21), Duration::from_millis(50));
 
     // Buffer items for up to 200ms or 5 items
     let buffer_processor = BufferProcessor::new(5, Duration::from_millis(200));
 
     // Print the batches
-    let consumer = DebugPrintConsumer;
+    let sink = DebugPrintSink;
 
-    let pipeline = Pipeline::new(producer, buffer_processor).buffer_size(10);
+    let pipeline = Pipeline::new(source, buffer_processor).buffer_size(10);
 
     let start = std::time::Instant::now();
-    pipeline.sink(consumer).await?;
+    pipeline.sink(sink).await?;
     let elapsed = start.elapsed();
 
     println!("Buffering completed in {:.2}s\n", elapsed.as_secs_f64());
     Ok(())
 }
 
-/// Example 11: Chaining producers
+/// Example 11: Chaining sources
 pub async fn chaining_example() -> Result<()> {
-    println!("=== Chaining Producers ===");
+    println!("=== Chaining Sources ===");
 
-    let producer1 = RangeProducer::new(1..4);
-    let producer2 = RangeProducer::new(10..13);
-    let producer3 = RangeProducer::new(20..23);
+    let source1 = RangeSource::new(1..4);
+    let source2 = RangeSource::new(10..13);
+    let source3 = RangeSource::new(20..23);
 
-    let chained = producer1.chain(producer2).chain(producer3);
+    let chained = source1.chain(source2).chain(source3);
 
     Pipeline::new(chained, NoOpProcessor::<i64>::new())
-        .sink(PrintConsumer::<i64>::with_prefix("Chained".to_string()))
+        .sink(PrintSink::<i64>::with_prefix("Chained".to_string()))
         .await?;
 
     println!();

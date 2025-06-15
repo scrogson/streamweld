@@ -1,4 +1,7 @@
-//! Concrete consumer implementations.
+//! Sink implementations for common event sinks.
+//!
+//! This module provides implementations of common sinks, such as print sinks,
+//! collect sinks, and function sinks.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -10,16 +13,19 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::time::sleep;
 
 use crate::error::Result;
-use crate::traits::Consumer;
+use crate::traits::Sink;
 use std::fmt::Display;
 
-/// A consumer that prints items to stdout
-pub struct PrintConsumer<T> {
+/// A sink that prints events to stdout.
+///
+/// This sink prints events to stdout.
+pub struct PrintSink<T> {
+    /// The prefix to print before each event
     prefix: Option<String>,
     _phantom: PhantomData<T>,
 }
 
-impl<T> PrintConsumer<T> {
+impl<T> PrintSink<T> {
     /// Create a new print consumer
     pub fn new() -> Self {
         Self {
@@ -38,7 +44,7 @@ impl<T> PrintConsumer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static + Display> Consumer for PrintConsumer<T> {
+impl<T: Send + 'static + Display> Sink for PrintSink<T> {
     type Item = T;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -54,18 +60,21 @@ impl<T: Send + 'static + Display> Consumer for PrintConsumer<T> {
     }
 }
 
-impl<T> Default for PrintConsumer<T> {
+impl<T> Default for PrintSink<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// A consumer that collects items into a vector
-pub struct CollectConsumer<T> {
+/// A sink that collects events into a vector.
+///
+/// This sink collects events into a vector.
+pub struct CollectSink<T> {
+    /// The vector to collect events into
     items: Arc<TokioMutex<Vec<T>>>,
 }
 
-impl<T: Send + 'static + Clone> CollectConsumer<T> {
+impl<T: Send + 'static + Clone> CollectSink<T> {
     /// Create a new collect consumer
     pub fn new() -> Self {
         Self {
@@ -73,7 +82,7 @@ impl<T: Send + 'static + Clone> CollectConsumer<T> {
         }
     }
 
-    /// Get the collected items
+    /// Get the collected events
     pub async fn into_items(self) -> Vec<T> {
         self.items.lock().await.clone()
     }
@@ -85,7 +94,7 @@ impl<T: Send + 'static + Clone> CollectConsumer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static + Clone> Consumer for CollectConsumer<T> {
+impl<T: Send + 'static + Clone> Sink for CollectSink<T> {
     type Item = T;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -99,13 +108,13 @@ impl<T: Send + 'static + Clone> Consumer for CollectConsumer<T> {
     }
 }
 
-impl<T: Send + 'static + Clone> Default for CollectConsumer<T> {
+impl<T: Send + 'static + Clone> Default for CollectSink<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Clone for CollectConsumer<T> {
+impl<T> Clone for CollectSink<T> {
     fn clone(&self) -> Self {
         Self {
             items: self.items.clone(),
@@ -113,13 +122,13 @@ impl<T> Clone for CollectConsumer<T> {
     }
 }
 
-/// A consumer that counts items
-pub struct CountConsumer<T> {
+/// A sink that counts events
+pub struct CountSink<T> {
     count: Arc<TokioMutex<usize>>,
     _phantom: PhantomData<T>,
 }
 
-impl<T> CountConsumer<T> {
+impl<T> CountSink<T> {
     /// Create a new count consumer
     pub fn new() -> Self {
         Self {
@@ -140,7 +149,7 @@ impl<T> CountConsumer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static> Consumer for CountConsumer<T> {
+impl<T: Send + 'static> Sink for CountSink<T> {
     type Item = T;
 
     async fn consume(&mut self, _item: Self::Item) -> Result<()> {
@@ -154,13 +163,13 @@ impl<T: Send + 'static> Consumer for CountConsumer<T> {
     }
 }
 
-impl<T> Default for CountConsumer<T> {
+impl<T> Default for CountSink<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Clone for CountConsumer<T> {
+impl<T> Clone for CountSink<T> {
     fn clone(&self) -> Self {
         Self {
             count: self.count.clone(),
@@ -169,13 +178,13 @@ impl<T> Clone for CountConsumer<T> {
     }
 }
 
-/// A consumer that writes items to a file
-pub struct FileConsumer<T> {
+/// A sink that writes events to a file
+pub struct FileSink<T> {
     writer: tokio::io::BufWriter<tokio::fs::File>,
     _phantom: PhantomData<T>,
 }
 
-impl<T> FileConsumer<T> {
+impl<T> FileSink<T> {
     /// Create a new file consumer
     pub async fn new<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let file = tokio::fs::File::create(path).await?;
@@ -200,7 +209,7 @@ impl<T> FileConsumer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static + Display> Consumer for FileConsumer<T> {
+impl<T: Send + 'static + Display> Sink for FileSink<T> {
     type Item = T;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -216,16 +225,16 @@ impl<T: Send + 'static + Display> Consumer for FileConsumer<T> {
     }
 }
 
-/// A consumer that batches items and processes them together
-pub struct BatchConsumer<C, T> {
+/// A sink that batches events and processes them together
+pub struct BatchSink<C, T> {
     inner: C,
     batch_size: usize,
     batch: Vec<T>,
 }
 
-impl<C, T> BatchConsumer<C, T>
+impl<C, T> BatchSink<C, T>
 where
-    C: Consumer<Item = Vec<T>>,
+    C: Sink<Item = Vec<T>>,
     T: Send + 'static,
 {
     /// Create a new batch consumer
@@ -248,9 +257,9 @@ where
 }
 
 #[async_trait]
-impl<C, T> Consumer for BatchConsumer<C, T>
+impl<C, T> Sink for BatchSink<C, T>
 where
-    C: Consumer<Item = Vec<T>> + Send,
+    C: Sink<Item = Vec<T>> + Send,
     T: Send + 'static,
 {
     type Item = T;
@@ -266,15 +275,15 @@ where
     }
 
     async fn finish(&mut self) -> Result<()> {
-        // Process any remaining items in the batch
+        // Process any remaining events in the batch
         self.process_batch().await?;
         self.inner.finish().await?;
         Ok(())
     }
 }
 
-/// A consumer that measures throughput
-pub struct ThroughputConsumer<C> {
+/// A sink that measures throughput
+pub struct ThroughputSink<C> {
     inner: C,
     start_time: Option<Instant>,
     count: usize,
@@ -282,7 +291,7 @@ pub struct ThroughputConsumer<C> {
     last_report: Option<Instant>,
 }
 
-impl<C> ThroughputConsumer<C> {
+impl<C> ThroughputSink<C> {
     /// Create a new throughput consumer
     pub fn new(inner: C, report_interval: Duration) -> Self {
         Self {
@@ -306,7 +315,7 @@ impl<C> ThroughputConsumer<C> {
                 // TODO: use this
                 let _interval_elapsed = now.duration_since(last_report);
                 println!(
-                    "Throughput: {:.2} items/sec (total: {} items in {:.2}s)",
+                    "Throughput: {:.2} events/sec (total: {} events in {:.2}s)",
                     total_rate,
                     self.count,
                     total_elapsed.as_secs_f64()
@@ -319,7 +328,7 @@ impl<C> ThroughputConsumer<C> {
 }
 
 #[async_trait]
-impl<C: Consumer + Send> Consumer for ThroughputConsumer<C> {
+impl<C: Sink + Send> Sink for ThroughputSink<C> {
     type Item = C::Item;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -348,14 +357,14 @@ impl<C: Consumer + Send> Consumer for ThroughputConsumer<C> {
     }
 }
 
-/// A consumer that applies rate limiting
-pub struct RateLimitedConsumer<C> {
+/// A sink that applies rate limiting
+pub struct RateLimitedSink<C> {
     inner: C,
     min_interval: Duration,
     last_consumed: Option<Instant>,
 }
 
-impl<C> RateLimitedConsumer<C> {
+impl<C> RateLimitedSink<C> {
     /// Create a new rate limited consumer
     pub fn new(inner: C, max_rate_per_second: u64) -> Self {
         let min_interval = Duration::from_nanos(1_000_000_000 / max_rate_per_second);
@@ -368,7 +377,7 @@ impl<C> RateLimitedConsumer<C> {
 }
 
 #[async_trait]
-impl<C: Consumer + Send> Consumer for RateLimitedConsumer<C> {
+impl<C: Sink + Send> Sink for RateLimitedSink<C> {
     type Item = C::Item;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -391,14 +400,14 @@ impl<C: Consumer + Send> Consumer for RateLimitedConsumer<C> {
     }
 }
 
-/// A consumer that aggregates items by key
-pub struct AggregateConsumer<K, V, F, T> {
+/// A sink that aggregates events by key
+pub struct AggregateSink<K, V, F, T> {
     map: Arc<TokioMutex<HashMap<K, V>>>,
     key_fn: F,
     _phantom: PhantomData<T>,
 }
 
-impl<K, V, F, T> AggregateConsumer<K, V, F, T>
+impl<K, V, F, T> AggregateSink<K, V, F, T>
 where
     K: std::hash::Hash + Eq + Send + 'static + Clone,
     V: Default + Send + 'static + Clone,
@@ -428,7 +437,7 @@ where
 }
 
 #[async_trait]
-impl<K, V, F, T> Consumer for AggregateConsumer<K, V, F, T>
+impl<K, V, F, T> Sink for AggregateSink<K, V, F, T>
 where
     K: std::hash::Hash + Eq + Send + 'static + Clone,
     V: Default + Send + 'static + Clone,

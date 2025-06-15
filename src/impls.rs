@@ -1,4 +1,7 @@
-//! Concrete implementations of producers, consumers, and processors.
+//! Concrete implementations of sources, sinks, and processors.
+//!
+//! This module provides concrete implementations of sources, sinks, and processors
+//! that can be used to build processing pipelines.
 
 pub mod combinators;
 pub mod consumers;

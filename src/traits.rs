@@ -1,4 +1,4 @@
-//! Core traits for the producer/consumer system.
+//! Core traits for the source/sink system.
 //!
 //! This module defines the fundamental abstractions that enable demand-driven
 //! data processing pipelines with automatic backpressure control.
@@ -6,25 +6,25 @@
 use crate::error::Result;
 use async_trait::async_trait;
 
-/// A producer generates items on demand.
+/// A source generates items on demand.
 ///
-/// Producers are pull-based - they only generate items when explicitly
-/// requested by downstream consumers, enabling natural backpressure control.
+/// Sources are pull-based - they only generate items when explicitly
+/// requested by downstream sinks, enabling natural backpressure control.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use async_trait::async_trait;
 /// use streamweld::error::Result;
-/// use streamweld::traits::Producer;
+/// use streamweld::traits::Source;
 ///
-/// struct CounterProducer {
+/// struct CounterSource {
 ///     current: u64,
 ///     max: u64,
 /// }
 ///
 /// #[async_trait]
-/// impl Producer for CounterProducer {
+/// impl Source for CounterSource {
 ///     type Item = u64;
 ///
 ///     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -39,33 +39,33 @@ use async_trait::async_trait;
 /// }
 /// ```
 #[async_trait]
-pub trait Producer {
-    /// The type of items this producer generates
+pub trait Source {
+    /// The type of items this source generates
     type Item: Send + 'static;
 
-    /// Produce the next item, or None if the producer is exhausted.
+    /// Produce the next item, or None if the source is exhausted.
     ///
     /// This method should be cheap to call repeatedly and should handle
     /// backpressure by only producing when called.
     async fn produce(&mut self) -> Result<Option<Self::Item>>;
 }
 
-/// A consumer processes items from upstream.
+/// A sink processes items from upstream.
 ///
-/// Consumers represent the demand side of the pipeline - they pull items
-/// from producers and process them.
+/// Sinks represent the demand side of the pipeline - they pull items
+/// from sources and process them.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use async_trait::async_trait;
 /// use streamweld::error::Result;
-/// use streamweld::traits::Consumer;
+/// use streamweld::traits::Sink;
 ///
-/// struct LogConsumer;
+/// struct LogSink;
 ///
 /// #[async_trait]
-/// impl Consumer for LogConsumer {
+/// impl Sink for LogSink {
 ///     type Item = String;
 ///
 ///     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -75,8 +75,8 @@ pub trait Producer {
 /// }
 /// ```
 #[async_trait]
-pub trait Consumer {
-    /// The type of items this consumer accepts
+pub trait Sink {
+    /// The type of items this sink accepts
     type Item: Send + 'static;
 
     /// Process a single item.
@@ -85,15 +85,15 @@ pub trait Consumer {
     /// the item is considered successfully processed.
     async fn consume(&mut self, item: Self::Item) -> Result<()>;
 
-    /// Called when the upstream producer is exhausted.
+    /// Called when the upstream source is exhausted.
     ///
-    /// This allows consumers to perform cleanup or flush any buffered state.
+    /// This allows sinks to perform cleanup or flush any buffered state.
     async fn finish(&mut self) -> Result<()> {
         Ok(())
     }
 }
 
-/// A processor transforms items (consumer + producer combined).
+/// A processor transforms items (sink + source combined).
 ///
 /// This is equivalent to GenStage's producer_consumer - it consumes items
 /// from upstream, transforms them, and produces new items for downstream.
@@ -136,8 +136,8 @@ pub trait Processor {
     }
 }
 
-/// Extension trait for composing producers with processors and consumers.
-pub trait ProducerExt: Producer + Sized {
+/// Extension trait for composing sources with processors and sinks.
+pub trait SourceExt: Source + Sized {
     /// Map items through a function
     fn map<F, U>(self, f: F) -> Map<Self, F>
     where
@@ -152,15 +152,15 @@ pub trait ProducerExt: Producer + Sized {
     /// Take only the first n items
     fn take(self, n: usize) -> Take<Self>;
 
-    /// Chain with another producer
+    /// Chain with another source
     fn chain<P2>(self, other: P2) -> Chain<Self, P2>
     where
-        P2: Producer<Item = Self::Item>;
+        P2: Source<Item = Self::Item>;
 }
 
-/// Extension trait for consumers
-pub trait ConsumerExt: Consumer + Sized {
-    /// Create a consumer that applies a function to each item before consuming
+/// Extension trait for sinks
+pub trait SinkExt: Sink + Sized {
+    /// Create a sink that applies a function to each item before consuming
     fn contramap<F, T>(self, f: F) -> Contramap<Self, F, T>
     where
         F: FnMut(T) -> Self::Item + Send,
@@ -196,8 +196,8 @@ pub struct Contramap<C, F, T> {
     pub _phantom: std::marker::PhantomData<T>,
 }
 
-// Auto-implement ProducerExt for all Producers
-impl<P: Producer> ProducerExt for P {
+// Auto-implement SourceExt for all Sources
+impl<P: Source> SourceExt for P {
     fn map<F, U>(self, f: F) -> Map<Self, F>
     where
         F: FnMut(Self::Item) -> U + Send,
@@ -225,7 +225,7 @@ impl<P: Producer> ProducerExt for P {
 
     fn chain<P2>(self, other: P2) -> Chain<Self, P2>
     where
-        P2: Producer<Item = Self::Item>,
+        P2: Source<Item = Self::Item>,
     {
         Chain {
             first: Some(self),
@@ -234,7 +234,7 @@ impl<P: Producer> ProducerExt for P {
     }
 }
 
-impl<C: Consumer> ConsumerExt for C {
+impl<C: Sink> SinkExt for C {
     fn contramap<F, T>(self, f: F) -> Contramap<Self, F, T>
     where
         F: FnMut(T) -> Self::Item + Send,
@@ -246,4 +246,30 @@ impl<C: Consumer> ConsumerExt for C {
             _phantom: std::marker::PhantomData,
         }
     }
+}
+
+/// A source that produces events from a function.
+///
+/// This is a convenience trait for creating sources from functions.
+pub trait SourceFromFn: Send + Sync {
+    /// The type of events produced by this source
+    type Item: Send + Sync + Clone;
+
+    /// Create a new source from a function
+    fn source_from_fn<F>(f: F) -> Self
+    where
+        F: Fn() -> Result<Vec<Self::Item>> + Send + Sync + 'static;
+}
+
+/// A sink that consumes events using a function.
+///
+/// This is a convenience trait for creating sinks from functions.
+pub trait SinkFromFn: Send + Sync {
+    /// The type of events consumed by this sink
+    type Item: Send + Sync + Clone;
+
+    /// Create a new sink from a function
+    fn sink_from_fn<F>(f: F) -> Self
+    where
+        F: Fn(Vec<Self::Item>) -> Result<()> + Send + Sync + 'static;
 }

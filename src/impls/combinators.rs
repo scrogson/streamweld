@@ -1,14 +1,14 @@
 //! Implementations of trait combinators defined in the traits module.
 
 use crate::error::Result;
-use crate::traits::{Chain, Consumer, Contramap, Filter, Map, Producer, Take};
+use crate::traits::{Chain, Contramap, Filter, Map, Sink, Source, Take};
 use async_trait::async_trait;
 
 // Map combinator implementation
 #[async_trait]
-impl<P, F, U> Producer for Map<P, F>
+impl<P, F, U> Source for Map<P, F>
 where
-    P: Producer + Send,
+    P: Source + Send,
     F: FnMut(P::Item) -> U + Send,
     U: Send + 'static,
 {
@@ -24,9 +24,9 @@ where
 
 // Filter combinator implementation
 #[async_trait]
-impl<P, F> Producer for Filter<P, F>
+impl<P, F> Source for Filter<P, F>
 where
-    P: Producer + Send,
+    P: Source + Send,
     F: FnMut(&P::Item) -> bool + Send,
 {
     type Item = P::Item;
@@ -48,9 +48,9 @@ where
 
 // Take combinator implementation
 #[async_trait]
-impl<P> Producer for Take<P>
+impl<P> Source for Take<P>
 where
-    P: Producer + Send,
+    P: Source + Send,
 {
     type Item = P::Item;
 
@@ -71,10 +71,10 @@ where
 
 // Chain combinator implementation
 #[async_trait]
-impl<P1, P2> Producer for Chain<P1, P2>
+impl<P1, P2> Source for Chain<P1, P2>
 where
-    P1: Producer + Send,
-    P2: Producer<Item = P1::Item> + Send,
+    P1: Source + Send,
+    P2: Source<Item = P1::Item> + Send,
 {
     type Item = P1::Item;
 
@@ -96,9 +96,9 @@ where
 
 // Contramap combinator implementation
 #[async_trait]
-impl<C, F, T> Consumer for Contramap<C, F, T>
+impl<C, F, T> Sink for Contramap<C, F, T>
 where
-    C: Consumer + Send,
+    C: Sink + Send,
     F: FnMut(T) -> C::Item + Send + Sync,
     T: Send + 'static,
 {
@@ -117,13 +117,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    use crate::impls::producers::*;
-    use crate::traits::ProducerExt;
+    use crate::impls::producers::RangeSource;
+    use crate::traits::SourceExt;
 
     #[tokio::test]
     async fn test_map_combinator() {
-        let producer = RangeProducer::new(1..6);
+        let producer = RangeSource::new(1..6);
         let mut mapped = producer.map(|x| x * 2);
 
         let mut results = Vec::new();
@@ -136,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_combinator() {
-        let producer = RangeProducer::new(1..11);
+        let producer = RangeSource::new(1..11);
         let mut filtered = producer.filter(|x| x % 2 == 0);
 
         let mut results = Vec::new();
@@ -149,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_take_combinator() {
-        let producer = RangeProducer::new(1..11);
+        let producer = RangeSource::new(1..11);
         let mut taken = producer.take(3);
 
         let mut results = Vec::new();
@@ -162,8 +161,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_chain_combinator() {
-        let producer1 = RangeProducer::new(1..4);
-        let producer2 = RangeProducer::new(4..7);
+        let producer1 = RangeSource::new(1..4);
+        let producer2 = RangeSource::new(4..7);
         let mut chained = producer1.chain(producer2);
 
         let mut results = Vec::new();
@@ -176,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complex_combination() {
-        let producer = RangeProducer::new(1..21);
+        let producer = RangeSource::new(1..21);
         let mut complex = producer
             .filter(|x| x % 2 == 0) // Even numbers
             .map(|x| x * 3) // Multiply by 3

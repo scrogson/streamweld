@@ -11,23 +11,23 @@ use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
-use crate::traits::{Consumer, Processor, Producer};
+use crate::traits::{Processor, Sink, Source};
 
-/// Helper function to create a simple producer from a function
-pub fn from_fn<F, Fut, T>(f: F) -> FnProducer<F, Fut, T>
+/// Helper function to create a simple source from a function
+pub fn from_fn<F, Fut, T>(f: F) -> FnSource<F, Fut, T>
 where
     F: FnMut() -> Fut + Send,
     Fut: Future<Output = Result<Option<T>>> + Send,
     T: Send + 'static,
 {
-    FnProducer {
+    FnSource {
         f,
         _phantom: std::marker::PhantomData,
     }
 }
 
-/// A producer created from a function
-pub struct FnProducer<F, Fut, T>
+/// A source created from a function
+pub struct FnSource<F, Fut, T>
 where
     F: FnMut() -> Fut + Send,
     Fut: Future<Output = Result<Option<T>>> + Send,
@@ -38,7 +38,7 @@ where
 }
 
 #[async_trait]
-impl<F, Fut, T> Producer for FnProducer<F, Fut, T>
+impl<F, Fut, T> Source for FnSource<F, Fut, T>
 where
     F: FnMut() -> Fut + Send,
     Fut: Future<Output = Result<Option<T>>> + Send,
@@ -51,21 +51,21 @@ where
     }
 }
 
-/// Helper function to create a simple consumer from a function
-pub fn consumer_from_fn<F, Fut, T>(f: F) -> FnConsumer<F, Fut, T>
+/// Helper function to create a simple sink from a function
+pub fn sink_from_fn<F, Fut, T>(f: F) -> FnSink<F, Fut, T>
 where
     F: FnMut(T) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
     T: Send + 'static,
 {
-    FnConsumer {
+    FnSink {
         f,
         _phantom: std::marker::PhantomData,
     }
 }
 
-/// A consumer created from a function
-pub struct FnConsumer<F, Fut, T>
+/// A sink created from a function
+pub struct FnSink<F, Fut, T>
 where
     F: FnMut(T) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
@@ -76,7 +76,7 @@ where
 }
 
 #[async_trait]
-impl<F, Fut, T> Consumer for FnConsumer<F, Fut, T>
+impl<F, Fut, T> Sink for FnSink<F, Fut, T>
 where
     F: FnMut(T) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,

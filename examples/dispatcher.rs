@@ -2,8 +2,12 @@
 //!
 //! Run with: cargo run --example dispatcher_example
 
+use std::sync::Arc;
 use std::time::Duration;
 use streamweld::dispatcher::*;
+use streamweld::impls::MapProcessor;
+use streamweld::impls::PrintSink;
+use streamweld::impls::RangeSource;
 use streamweld::prelude::*;
 use tokio::time::sleep;
 
@@ -39,53 +43,53 @@ impl WorkItem {
 async fn demand_dispatcher_example() -> Result<()> {
     println!("=== Demand Dispatcher Example (Load Balancing) ===");
 
-    // Create a dispatcher that distributes work to consumers with highest demand
+    // Create a dispatcher that distributes work to sinks with highest demand
     let dispatcher = DispatcherBuilder::new()
         .buffer_size(20)
         .max_demand(10)
         .demand();
 
-    // Create multiple consumers with different processing speeds
-    let fast_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🏃 Fast consumer processing: {}", item.data);
+    // Create multiple sinks with different processing speeds
+    let fast_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🏃 Fast sink processing: {}", item.data);
         sleep(Duration::from_millis(50)).await; // Fast processing
         Ok(())
     });
 
-    let slow_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🐌 Slow consumer processing: {}", item.data);
+    let slow_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🐌 Slow sink processing: {}", item.data);
         sleep(Duration::from_millis(200)).await; // Slow processing
         Ok(())
     });
 
-    let medium_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🚶 Medium consumer processing: {}", item.data);
+    let medium_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🚶 Medium sink processing: {}", item.data);
         sleep(Duration::from_millis(100)).await; // Medium processing
         Ok(())
     });
 
-    // Subscribe consumers
-    let consumer1_id = dispatcher.subscribe_consumer(fast_consumer, None).await?;
-    let consumer2_id = dispatcher.subscribe_consumer(slow_consumer, None).await?;
-    let consumer3_id = dispatcher.subscribe_consumer(medium_consumer, None).await?;
+    // Subscribe sinks
+    let _sink1_id = dispatcher.subscribe_sink(fast_sink, None).await?;
+    let _sink2_id = dispatcher.subscribe_sink(slow_sink, None).await?;
+    let _sink3_id = dispatcher.subscribe_sink(medium_sink, None).await?;
 
     // Generate work items
     let work_items: Vec<WorkItem> = (1..=20)
         .map(|i| WorkItem::new(i, "general", &format!("Task-{}", i)))
         .collect();
 
-    // Dispatch work - should go mostly to fast consumer due to demand
+    // Dispatch work - should go mostly to fast sink due to demand
     dispatcher.dispatch(work_items).await?;
 
-    // Let consumers finish processing
+    // Let sinks finish processing
     sleep(Duration::from_secs(2)).await;
 
-    // Show consumer info
-    let info = dispatcher.consumer_info().await;
-    for consumer in info {
+    // Show sink info
+    let info = dispatcher.sink_info().await;
+    for sink in info {
         println!(
-            "Consumer {:?}: demand={}, partition={:?}",
-            consumer.id, consumer.current_demand, consumer.partition
+            "Sink {:?}: demand={}, partition={:?}",
+            sink.id, sink.current_demand, sink.partition
         );
     }
 
@@ -97,31 +101,29 @@ async fn demand_dispatcher_example() -> Result<()> {
 async fn broadcast_dispatcher_example() -> Result<()> {
     println!("=== Broadcast Dispatcher Example (Fan-out) ===");
 
-    // Create a broadcast dispatcher that sends events to ALL consumers
+    // Create a broadcast dispatcher that sends events to ALL sinks
     let dispatcher = DispatcherBuilder::new().buffer_size(10).broadcast();
 
-    // Create multiple consumers for different purposes
-    let logger_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
+    // Create multiple sinks for different purposes
+    let logger_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
         println!("📝 Logger: Recorded {}", item.data);
         Ok(())
     });
 
-    let metrics_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
+    let metrics_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
         println!("📊 Metrics: Counting item in category '{}'", item.category);
         Ok(())
     });
 
-    let backup_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
+    let backup_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
         println!("💾 Backup: Archiving item {}", item.id);
         Ok(())
     });
 
-    // Subscribe all consumers
-    dispatcher.subscribe_consumer(logger_consumer, None).await?;
-    dispatcher
-        .subscribe_consumer(metrics_consumer, None)
-        .await?;
-    dispatcher.subscribe_consumer(backup_consumer, None).await?;
+    // Subscribe all sinks
+    dispatcher.subscribe_sink(logger_sink, None).await?;
+    dispatcher.subscribe_sink(metrics_sink, None).await?;
+    dispatcher.subscribe_sink(backup_sink, None).await?;
 
     // Generate events
     let events = vec![
@@ -130,7 +132,7 @@ async fn broadcast_dispatcher_example() -> Result<()> {
         WorkItem::new(3, "urgent", "Time-sensitive data"),
     ];
 
-    // Broadcast to all consumers
+    // Broadcast to all sinks
     dispatcher.dispatch(events).await?;
 
     sleep(Duration::from_millis(500)).await;
@@ -142,19 +144,19 @@ async fn broadcast_dispatcher_example() -> Result<()> {
 async fn broadcast_with_selector_example() -> Result<()> {
     println!("=== Broadcast with Selector Example (Filtered Fan-out) ===");
 
-    // Create consumers with selectors for different categories
-    let important_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
+    // Create sinks with selectors for different categories
+    let important_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
         println!("🚨 Important handler: {}", item.data);
         Ok(())
     });
 
-    let normal_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
+    let normal_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
         println!("📋 Normal handler: {}", item.data);
         Ok(())
     });
 
     // Create separate dispatchers with different selectors
-    // Note: In a real implementation, you'd want a single dispatcher with per-consumer selectors
+    // Note: In a real implementation, you'd want a single dispatcher with per-sink selectors
     let important_dispatcher = DispatcherBuilder::new()
         .broadcast_with_selector(|item: &WorkItem| item.category == "important");
 
@@ -162,11 +164,9 @@ async fn broadcast_with_selector_example() -> Result<()> {
         .broadcast_with_selector(|item: &WorkItem| item.category == "normal");
 
     important_dispatcher
-        .subscribe_consumer(important_consumer, None)
+        .subscribe_sink(important_sink, None)
         .await?;
-    normal_dispatcher
-        .subscribe_consumer(normal_consumer, None)
-        .await?;
+    normal_dispatcher.subscribe_sink(normal_sink, None).await?;
 
     // Generate mixed events
     let events = vec![
@@ -203,31 +203,31 @@ async fn partition_dispatcher_example() -> Result<()> {
             .to_uppercase()
     });
 
-    // Create consumers for each partition
-    let consumer_a = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🅰️  Partition A consumer: {}", item.data);
+    // Create sinks for each partition
+    let sink_a = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🅰️  Partition A sink: {}", item.data);
         Ok(())
     });
 
-    let consumer_b = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🅱️  Partition B consumer: {}", item.data);
+    let sink_b = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🅱️  Partition B sink: {}", item.data);
         Ok(())
     });
 
-    let consumer_c = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🅲  Partition C consumer: {}", item.data);
+    let sink_c = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🅲  Partition C sink: {}", item.data);
         Ok(())
     });
 
-    // Subscribe consumers to specific partitions
+    // Subscribe sinks to specific partitions
     dispatcher
-        .subscribe_consumer(consumer_a, Some("A".to_string()))
+        .subscribe_sink(sink_a, Some("A".to_string()))
         .await?;
     dispatcher
-        .subscribe_consumer(consumer_b, Some("B".to_string()))
+        .subscribe_sink(sink_b, Some("B".to_string()))
         .await?;
     dispatcher
-        .subscribe_consumer(consumer_c, Some("C".to_string()))
+        .subscribe_sink(sink_c, Some("C".to_string()))
         .await?;
 
     // Generate events with different categories
@@ -254,71 +254,66 @@ async fn custom_dispatcher_example() -> Result<()> {
 
     // Define a custom dispatcher that routes based on priority
     struct PriorityDispatcher {
-        high_priority_consumers: std::sync::Mutex<Vec<ConsumerId>>,
-        low_priority_consumers: std::sync::Mutex<Vec<ConsumerId>>,
+        high_priority_sinks: std::sync::Mutex<Vec<SinkId>>,
+        low_priority_sinks: std::sync::Mutex<Vec<SinkId>>,
     }
 
     impl PriorityDispatcher {
         fn new() -> Self {
             Self {
-                high_priority_consumers: std::sync::Mutex::new(Vec::new()),
-                low_priority_consumers: std::sync::Mutex::new(Vec::new()),
+                high_priority_sinks: std::sync::Mutex::new(Vec::new()),
+                low_priority_sinks: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
 
     impl CustomDispatcher<WorkItem> for PriorityDispatcher {
-        fn subscribe(&self, consumer_id: ConsumerId, partition: Option<String>) -> Result<()> {
+        fn subscribe(&self, sink_id: SinkId, partition: Option<String>) -> Result<()> {
             match partition.as_deref() {
                 Some("high") => {
-                    self.high_priority_consumers
-                        .lock()
-                        .unwrap()
-                        .push(consumer_id);
+                    self.high_priority_sinks.lock().unwrap().push(sink_id);
                 }
                 Some("low") | None => {
-                    self.low_priority_consumers
-                        .lock()
-                        .unwrap()
-                        .push(consumer_id);
+                    self.low_priority_sinks.lock().unwrap().push(sink_id);
                 }
                 _ => return Err(Error::custom("Invalid partition")),
             }
             Ok(())
         }
 
-        fn unsubscribe(&self, consumer_id: ConsumerId) -> Result<()> {
-            self.high_priority_consumers
+        fn unsubscribe(&self, sink_id: SinkId) -> Result<()> {
+            self.high_priority_sinks
                 .lock()
                 .unwrap()
-                .retain(|&id| id != consumer_id);
-            self.low_priority_consumers
+                .retain(|&id| id != sink_id);
+            self.low_priority_sinks
                 .lock()
                 .unwrap()
-                .retain(|&id| id != consumer_id);
+                .retain(|&id| id != sink_id);
             Ok(())
         }
 
         fn dispatch(
             &self,
             events: Vec<WorkItem>,
-            consumers: &std::collections::HashMap<ConsumerId, ConsumerHandle<WorkItem>>,
+            sinks: &std::collections::HashMap<SinkId, SinkHandle<WorkItem>>,
         ) -> Result<()> {
             for event in events {
-                let target_consumers = if event.category == "urgent" {
-                    &self.high_priority_consumers
+                let target_sinks = if event.category == "urgent" {
+                    &self.high_priority_sinks
                 } else {
-                    &self.low_priority_consumers
+                    &self.low_priority_sinks
                 };
 
-                // Route to appropriate consumer pool
-                let consumer_ids = target_consumers.lock().unwrap();
-                if !consumer_ids.is_empty() {
-                    let target_id = consumer_ids[event.id as usize % consumer_ids.len()];
-                    if let Some(_handle) = consumers.get(&target_id) {
+                // Route to appropriate sink pool
+                let sink_ids = target_sinks.lock().unwrap();
+                if !sink_ids.is_empty() {
+                    let idx = event.id.try_into().unwrap_or(0) % sink_ids.len();
+                    let target_id = sink_ids[idx];
+                    if let Some(_handle) = sinks.get(&target_id) {
                         // In real implementation, send event to handle.sender
                         println!(
-                            "Custom dispatcher: Routing {} to consumer {:?}",
+                            "Custom dispatcher: Routing {} to sink {:?}",
                             event.data, target_id
                         );
                     }
@@ -327,7 +322,7 @@ async fn custom_dispatcher_example() -> Result<()> {
             Ok(())
         }
 
-        fn handle_demand(&self, _consumer_id: ConsumerId, _demand: usize) -> Result<()> {
+        fn handle_demand(&self, _sink_id: SinkId, _demand: usize) -> Result<()> {
             // Custom demand handling logic
             Ok(())
         }
@@ -336,22 +331,22 @@ async fn custom_dispatcher_example() -> Result<()> {
     let custom_dispatcher = PriorityDispatcher::new();
     let dispatcher = DispatcherBuilder::new().custom(custom_dispatcher);
 
-    // Subscribe consumers to different priority levels
-    let high_priority_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("🔥 High priority consumer: {}", item.data);
+    // Subscribe sinks to different priority levels
+    let high_priority_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("🔥 High priority sink: {}", item.data);
         Ok(())
     });
 
-    let low_priority_consumer = streamweld::util::consumer_from_fn(|item: WorkItem| async move {
-        println!("📝 Low priority consumer: {}", item.data);
+    let low_priority_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+        println!("📝 Low priority sink: {}", item.data);
         Ok(())
     });
 
     dispatcher
-        .subscribe_consumer(high_priority_consumer, Some("high".to_string()))
+        .subscribe_sink(high_priority_sink, Some("high".to_string()))
         .await?;
     dispatcher
-        .subscribe_consumer(low_priority_consumer, Some("low".to_string()))
+        .subscribe_sink(low_priority_sink, Some("low".to_string()))
         .await?;
 
     // Generate events with different priorities
@@ -376,28 +371,29 @@ async fn pipeline_with_dispatcher_example() -> Result<()> {
     // This would be the ideal API - a pipeline that outputs to a dispatcher
     // For now, this is conceptual since we'd need to integrate dispatchers into pipelines
 
-    let producer = RangeProducer::new(1..11);
-    let processor = MapProcessor::new(|x| WorkItem::new(x as u64, "data", &format!("Item-{}", x)));
+    let source = RangeSource::new(1..11);
+    let processor: MapProcessor<_, i64, WorkItem> =
+        MapProcessor::new(|x: i64| WorkItem::new(x as u64, "data", &format!("Item-{}", x)));
 
     // Collect processed items
-    let consumer = CollectConsumer::new();
+    let collector: CollectSink<WorkItem> = CollectSink::new();
 
-    Pipeline::new(producer, processor)
-        .sink(consumer.clone())
+    Pipeline::new(source, processor)
+        .sink(collector.clone())
         .await?;
 
     // Get the results and dispatch them
-    let items = consumer.items();
-    let collected = items.lock().await.clone();
+    let items = collector.items();
+    let collected: Vec<WorkItem> = items.lock().await.iter().cloned().collect();
 
     // Now use a dispatcher to distribute the collected items
-    let dispatcher = DispatcherBuilder::new().demand();
+    let dispatcher = Arc::new(DispatcherBuilder::<WorkItem>::new().demand());
 
-    let consumer1 = PrintConsumer::with_prefix("Consumer-1".to_string());
-    let consumer2 = PrintConsumer::with_prefix("Consumer-2".to_string());
+    let sink1 = PrintSink::with_prefix("Sink-1".to_string());
+    let sink2 = PrintSink::with_prefix("Sink-2".to_string());
 
-    dispatcher.subscribe_consumer(consumer1, None).await?;
-    dispatcher.subscribe_consumer(consumer2, None).await?;
+    dispatcher.subscribe_sink(sink1, None).await?;
+    dispatcher.subscribe_sink(sink2, None).await?;
 
     dispatcher.dispatch(collected).await?;
 

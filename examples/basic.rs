@@ -5,11 +5,11 @@
 use std::time::Duration;
 use streamweld::prelude::*;
 
-/// Custom consumer for Vec<i64>
-struct DebugPrintConsumer;
+/// Custom sink for Vec<i64>
+struct DebugPrintSink;
 
 #[async_trait::async_trait]
-impl streamweld::traits::Consumer for DebugPrintConsumer {
+impl streamweld::traits::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
     async fn consume(&mut self, item: Self::Item) -> streamweld::error::Result<()> {
@@ -22,12 +22,12 @@ impl streamweld::traits::Consumer for DebugPrintConsumer {
 async fn simple_example() -> Result<()> {
     println!("=== Simple Number Processing ===");
 
-    let producer = RangeProducer::new(1..11);
-    let consumer = PrintConsumer::with_prefix("Number".to_string());
+    let source = RangeSource::new(1..11);
+    let sink = PrintSink::with_prefix("Number".to_string());
 
-    Pipeline::new(producer, NoOpProcessor::<i64>::new())
+    Pipeline::new(source, NoOpProcessor::<i64>::new())
         .buffer_size(3)
-        .sink(consumer)
+        .sink(sink)
         .await?;
 
     println!();
@@ -38,12 +38,12 @@ async fn simple_example() -> Result<()> {
 async fn transform_filter_example() -> Result<()> {
     println!("=== Transform and Filter ===");
 
-    let producer = RangeProducer::new(1..21)
+    let source = RangeSource::new(1..21)
         .filter(|x| x % 3 == 0)
         .map(|x| x * x);
 
-    Pipeline::new(producer, NoOpProcessor::<i64>::new())
-        .sink(PrintConsumer::with_prefix("Square".to_string()))
+    Pipeline::new(source, NoOpProcessor::<i64>::new())
+        .sink(PrintSink::with_prefix("Square".to_string()))
         .await?;
 
     println!();
@@ -54,8 +54,8 @@ async fn transform_filter_example() -> Result<()> {
 async fn functional_example() -> Result<()> {
     println!("=== Functional Components ===");
 
-    // Create a producer from a function
-    let producer = streamweld::util::from_fn(|| async {
+    // Create a source from a function
+    let source = streamweld::util::from_fn(|| async {
         static mut COUNTER: i32 = 0;
         unsafe {
             COUNTER += 1;
@@ -67,14 +67,14 @@ async fn functional_example() -> Result<()> {
         }
     });
 
-    // Create a consumer from a function
-    let consumer = streamweld::util::consumer_from_fn(|item: String| async move {
+    // Create a sink from a function
+    let sink = streamweld::util::sink_from_fn(|item: String| async move {
         println!("Processed: {}", item.to_uppercase());
         Ok(())
     });
 
-    Pipeline::new(producer, NoOpProcessor::<String>::new())
-        .sink(consumer)
+    Pipeline::new(source, NoOpProcessor::<String>::new())
+        .sink(sink)
         .await?;
 
     println!();
@@ -85,11 +85,11 @@ async fn functional_example() -> Result<()> {
 async fn collection_example() -> Result<()> {
     println!("=== Collection and Counting ===");
 
-    let producer = FibonacciProducer::with_limit(10);
-    let collector = CollectConsumer::new();
+    let source = FibonacciSource::with_limit(10);
+    let collector = CollectSink::new();
     let collector_ref = collector.clone();
 
-    Pipeline::new(producer, NoOpProcessor::<u64>::new())
+    Pipeline::new(source, NoOpProcessor::<u64>::new())
         .sink(collector)
         .await?;
 
@@ -104,14 +104,14 @@ async fn collection_example() -> Result<()> {
 async fn rate_limit_example() -> Result<()> {
     println!("=== Rate Limiting ===");
 
-    let producer = RangeProducer::new(1..9);
+    let source = RangeSource::new(1..9);
     let rate_limiter = RateLimitProcessor::new(3); // 3 items per second
 
     let start = std::time::Instant::now();
 
-    Pipeline::new(producer, rate_limiter)
+    Pipeline::new(source, rate_limiter)
         .operation_timeout(Duration::from_secs(5))
-        .sink(PrintConsumer::with_prefix("Rate-limited".to_string()))
+        .sink(PrintSink::with_prefix("Rate-limited".to_string()))
         .await?;
 
     let elapsed = start.elapsed();
@@ -125,29 +125,27 @@ async fn rate_limit_example() -> Result<()> {
 async fn batching_example() -> Result<()> {
     println!("=== Batching ===");
 
-    let producer = RangeProducer::new(1..16);
+    let source = RangeSource::new(1..16);
     let batcher = BatchProcessor::new(4); // Groups of 4
 
-    Pipeline::new(producer, batcher)
-        .sink(DebugPrintConsumer)
-        .await?;
+    Pipeline::new(source, batcher).sink(DebugPrintSink).await?;
 
     println!();
     Ok(())
 }
 
-/// Example 7: Chaining producers
+/// Example 7: Chaining sources
 async fn chaining_example() -> Result<()> {
-    println!("=== Chaining Producers ===");
+    println!("=== Chaining Sources ===");
 
-    let producer1 = RangeProducer::new(1..4);
-    let producer2 = RangeProducer::new(10..13);
-    let producer3 = RangeProducer::new(20..23);
+    let source1 = RangeSource::new(1..4);
+    let source2 = RangeSource::new(10..13);
+    let source3 = RangeSource::new(20..23);
 
-    let chained = producer1.chain(producer2).chain(producer3);
+    let chained = source1.chain(source2).chain(source3);
 
     Pipeline::new(chained, NoOpProcessor::<i64>::new())
-        .sink(PrintConsumer::with_prefix("Chained".to_string()))
+        .sink(PrintSink::with_prefix("Chained".to_string()))
         .await?;
 
     println!();
@@ -158,13 +156,13 @@ async fn chaining_example() -> Result<()> {
 async fn combinators_example() -> Result<()> {
     println!("=== Using Combinators ===");
 
-    let producer = RangeProducer::new(1..51)
+    let source = RangeSource::new(1..51)
         .filter(|x| x % 2 == 0) // Even numbers
         .map(|x| x * 3) // Multiply by 3
         .take(5); // Take first 5
 
-    Pipeline::new(producer, NoOpProcessor::<i64>::new())
-        .sink(PrintConsumer::with_prefix("Combined".to_string()))
+    Pipeline::new(source, NoOpProcessor::<i64>::new())
+        .sink(PrintSink::with_prefix("Combined".to_string()))
         .await?;
 
     println!();

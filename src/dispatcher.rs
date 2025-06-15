@@ -1,7 +1,7 @@
-//! Dispatcher implementation for controlling event distribution from producers to consumers.
+//! Dispatcher implementation for controlling event distribution from sources to sinks.
 //!
 //! Dispatchers are inspired by Elixir's GenStage dispatchers and control how events
-//! are routed from a single producer to multiple consumers.
+//! are routed from a single source to multiple sinks.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -10,15 +10,15 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::error::Result;
-use crate::traits::Consumer;
+use crate::traits::Sink;
 
 /// Configuration for dispatcher behavior
 pub struct DispatcherConfig {
-    /// Buffer size for consumer channels
+    /// Buffer size for sink channels
     pub buffer_size: usize,
-    /// Maximum demand per consumer
+    /// Maximum demand per sink
     pub max_demand: usize,
-    /// Whether to shuffle consumers on first dispatch to prevent overloading first consumer
+    /// Whether to shuffle sinks on first dispatch to prevent overloading first sink
     pub shuffle_on_first: bool,
 }
 
@@ -44,11 +44,11 @@ impl Default for DispatcherConfig {
 
 /// Types of dispatchers available
 pub enum DispatcherType<H> {
-    /// Demand-based dispatcher (sends to consumer with highest demand)
+    /// Demand-based dispatcher (sends to sink with highest demand)
     Demand,
-    /// Broadcast dispatcher (sends to all consumers)
+    /// Broadcast dispatcher (sends to all sinks)
     Broadcast {
-        /// Optional selector function for filtering events per consumer
+        /// Optional selector function for filtering events per sink
         selector: Option<Arc<dyn Fn(&H) -> bool + Send + Sync>>,
     },
     /// Partition dispatcher (routes based on hash function)
@@ -78,51 +78,47 @@ impl<H> std::fmt::Debug for DispatcherType<H> {
 
 /// Trait for implementing custom dispatchers
 pub trait CustomDispatcher<T> {
-    /// Handle a new consumer subscription
-    fn subscribe(&self, consumer_id: ConsumerId, partition: Option<String>) -> Result<()>;
+    /// Handle a new sink subscription
+    fn subscribe(&self, sink_id: SinkId, partition: Option<String>) -> Result<()>;
 
-    /// Handle consumer unsubscription
-    fn unsubscribe(&self, consumer_id: ConsumerId) -> Result<()>;
+    /// Handle sink unsubscription
+    fn unsubscribe(&self, sink_id: SinkId) -> Result<()>;
 
-    /// Dispatch events to appropriate consumers
-    fn dispatch(
-        &self,
-        events: Vec<T>,
-        consumers: &HashMap<ConsumerId, ConsumerHandle<T>>,
-    ) -> Result<()>;
+    /// Dispatch events to appropriate sinks
+    fn dispatch(&self, events: Vec<T>, sinks: &HashMap<SinkId, SinkHandle<T>>) -> Result<()>;
 
-    /// Handle demand from a consumer
-    fn handle_demand(&self, consumer_id: ConsumerId, demand: usize) -> Result<()>;
+    /// Handle demand from a sink
+    fn handle_demand(&self, sink_id: SinkId, demand: usize) -> Result<()>;
 }
 
-/// Unique identifier for consumers
+/// Unique identifier for sinks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConsumerId(pub u64);
+pub struct SinkId(pub u64);
 
-/// Handle for managing a consumer
-pub struct ConsumerHandle<T> {
-    pub id: ConsumerId,
+/// Handle for managing a sink
+pub struct SinkHandle<T> {
+    pub id: SinkId,
     pub sender: mpsc::Sender<T>,
     pub demand: Arc<Mutex<usize>>,
     pub partition: Option<String>,
     pub max_demand: usize,
 }
 
-/// Consumer information for dispatcher management
+/// Sink information for dispatcher management
 #[derive(Debug)]
-pub struct ConsumerInfo {
-    pub id: ConsumerId,
+pub struct SinkInfo {
+    pub id: SinkId,
     pub partition: Option<String>,
     pub current_demand: usize,
     pub max_demand: usize,
 }
 
-/// Main dispatcher that manages producer-to-consumer distribution
+/// Main dispatcher that manages source-to-sink distribution
 pub struct Dispatcher<T> {
     dispatcher_type: DispatcherType<T>,
-    consumers: Arc<Mutex<HashMap<ConsumerId, ConsumerHandle<T>>>>,
+    sinks: Arc<Mutex<HashMap<SinkId, SinkHandle<T>>>>,
     config: DispatcherConfig,
-    next_consumer_id: Arc<Mutex<u64>>,
+    next_sink_id: Arc<Mutex<u64>>,
 }
 
 impl<T> Dispatcher<T>
@@ -133,24 +129,20 @@ where
     pub fn new(dispatcher_type: DispatcherType<T>, config: DispatcherConfig) -> Self {
         Self {
             dispatcher_type,
-            consumers: Arc::new(Mutex::new(HashMap::new())),
+            sinks: Arc::new(Mutex::new(HashMap::new())),
             config,
-            next_consumer_id: Arc::new(Mutex::new(0)),
+            next_sink_id: Arc::new(Mutex::new(0)),
         }
     }
 
-    /// Subscribe a new consumer
-    pub async fn subscribe_consumer<C>(
-        &self,
-        consumer: C,
-        partition: Option<String>,
-    ) -> Result<ConsumerId>
+    /// Subscribe a new sink
+    pub async fn subscribe_sink<C>(&self, sink: C, partition: Option<String>) -> Result<SinkId>
     where
-        C: Consumer<Item = T> + Send + 'static,
+        C: Sink<Item = T> + Send + 'static,
     {
-        let consumer_id = {
-            let mut next_id = self.next_consumer_id.lock().await;
-            let id = ConsumerId(*next_id);
+        let sink_id = {
+            let mut next_id = self.next_sink_id.lock().await;
+            let id = SinkId(*next_id);
             *next_id += 1;
             id
         };
@@ -158,41 +150,41 @@ where
         let (sender, receiver) = mpsc::channel(self.config.buffer_size);
         let demand = Arc::new(Mutex::new(self.config.max_demand));
 
-        let handle = ConsumerHandle {
-            id: consumer_id,
+        let handle = SinkHandle {
+            id: sink_id,
             sender,
             demand: demand.clone(),
             partition: partition.clone(),
             max_demand: self.config.max_demand,
         };
 
-        // Spawn task to run the consumer
-        self.spawn_consumer_task(consumer, receiver, demand).await?;
+        // Spawn task to run the sink
+        self.spawn_sink_task(sink, receiver, demand).await?;
 
-        // Add to consumers map
-        let mut consumers = self.consumers.lock().await;
-        consumers.insert(consumer_id, handle);
+        // Add to sinks map
+        let mut sinks = self.sinks.lock().await;
+        sinks.insert(sink_id, handle);
 
         // Handle dispatcher-specific subscription logic
         match &self.dispatcher_type {
             DispatcherType::Custom(dispatcher) => {
-                dispatcher.subscribe(consumer_id, partition)?;
+                dispatcher.subscribe(sink_id, partition)?;
             }
             _ => {} // Built-in dispatchers handle this automatically
         }
 
-        Ok(consumer_id)
+        Ok(sink_id)
     }
 
-    /// Unsubscribe a consumer
-    pub async fn unsubscribe_consumer(&self, consumer_id: ConsumerId) -> Result<()> {
-        let mut consumers = self.consumers.lock().await;
+    /// Unsubscribe a sink
+    pub async fn unsubscribe_sink(&self, sink_id: SinkId) -> Result<()> {
+        let mut sinks = self.sinks.lock().await;
 
-        if consumers.remove(&consumer_id).is_some() {
+        if sinks.remove(&sink_id).is_some() {
             // Handle dispatcher-specific unsubscription logic
             match &self.dispatcher_type {
                 DispatcherType::Custom(dispatcher) => {
-                    dispatcher.unsubscribe(consumer_id)?;
+                    dispatcher.unsubscribe(sink_id)?;
                 }
                 _ => {}
             }
@@ -201,57 +193,57 @@ where
         Ok(())
     }
 
-    /// Dispatch events to consumers based on dispatcher type
+    /// Dispatch events to sinks based on dispatcher type
     pub async fn dispatch(&self, events: Vec<T>) -> Result<()> {
-        let consumers = self.consumers.lock().await;
+        let sinks = self.sinks.lock().await;
 
-        if consumers.is_empty() {
-            return Ok(()); // No consumers to dispatch to
+        if sinks.is_empty() {
+            return Ok(()); // No sinks to dispatch to
         }
 
         match &self.dispatcher_type {
-            DispatcherType::Demand => self.dispatch_demand(events, &consumers).await,
+            DispatcherType::Demand => self.dispatch_demand(events, &sinks).await,
             DispatcherType::Broadcast { selector } => {
-                self.dispatch_broadcast(events, &consumers, selector.as_ref())
+                self.dispatch_broadcast(events, &sinks, selector.as_ref())
                     .await
             }
             DispatcherType::Partition {
                 partitions,
                 hash_fn,
             } => {
-                self.dispatch_partition(events, &consumers, partitions, hash_fn)
+                self.dispatch_partition(events, &sinks, partitions, hash_fn)
                     .await
             }
-            DispatcherType::Custom(dispatcher) => dispatcher.dispatch(events, &consumers),
+            DispatcherType::Custom(dispatcher) => dispatcher.dispatch(events, &sinks),
         }
     }
 
-    /// Demand-based dispatch: send to consumer with highest demand
+    /// Demand-based dispatch: send to sink with highest demand
     async fn dispatch_demand(
         &self,
         events: Vec<T>,
-        consumers: &HashMap<ConsumerId, ConsumerHandle<T>>,
+        sinks: &HashMap<SinkId, SinkHandle<T>>,
     ) -> Result<()> {
-        let mut consumer_demands = Vec::new();
+        let mut sink_demands = Vec::new();
 
-        // Collect current demand from all consumers
-        for (id, handle) in consumers {
+        // Collect current demand from all sinks
+        for (id, handle) in sinks {
             let demand = *handle.demand.lock().await;
             if demand > 0 {
-                consumer_demands.push((*id, demand, handle));
+                sink_demands.push((*id, demand, handle));
             }
         }
 
-        if consumer_demands.is_empty() {
+        if sink_demands.is_empty() {
             return Ok(()); // No demand
         }
 
         // Sort by demand (highest first)
-        consumer_demands.sort_by(|a, b| b.1.cmp(&a.1));
+        sink_demands.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Distribute events starting with highest demand consumer
+        // Distribute events starting with highest demand sink
         let mut event_index = 0;
-        for (_, demand, handle) in consumer_demands {
+        for (_, demand, handle) in sink_demands {
             if event_index >= events.len() {
                 break;
             }
@@ -268,8 +260,8 @@ where
 
             // Update demand
             {
-                let mut consumer_demand = handle.demand.lock().await;
-                *consumer_demand = consumer_demand.saturating_sub(to_send);
+                let mut sink_demand = handle.demand.lock().await;
+                *sink_demand = sink_demand.saturating_sub(to_send);
             }
 
             event_index += to_send;
@@ -278,15 +270,15 @@ where
         Ok(())
     }
 
-    /// Broadcast dispatch: send to all consumers (with optional selector)
+    /// Broadcast dispatch: send to all sinks (with optional selector)
     async fn dispatch_broadcast(
         &self,
         events: Vec<T>,
-        consumers: &HashMap<ConsumerId, ConsumerHandle<T>>,
+        sinks: &HashMap<SinkId, SinkHandle<T>>,
         selector: Option<&Arc<dyn Fn(&T) -> bool + Send + Sync>>,
     ) -> Result<()> {
         for event in events {
-            for handle in consumers.values() {
+            for handle in sinks.values() {
                 // Apply selector if provided
                 if let Some(selector_fn) = selector {
                     if !selector_fn(&event) {
@@ -294,18 +286,9 @@ where
                     }
                 }
 
-                let demand = {
-                    let mut consumer_demand = handle.demand.lock().await;
-                    if *consumer_demand > 0 {
-                        *consumer_demand -= 1;
-                        true
-                    } else {
-                        false
-                    }
-                };
-
-                if demand {
-                    // handle.sender.send(event.clone()).await.map_err(|_| Error::ChannelClosed)?;
+                let mut sink_demand = handle.demand.lock().await;
+                if *sink_demand > 0 {
+                    *sink_demand -= 1;
                 }
             }
         }
@@ -317,15 +300,15 @@ where
     async fn dispatch_partition(
         &self,
         events: Vec<T>,
-        consumers: &HashMap<ConsumerId, ConsumerHandle<T>>,
+        sinks: &HashMap<SinkId, SinkHandle<T>>,
         _partitions: &[String],
         hash_fn: &Arc<dyn Fn(&T) -> String + Send + Sync>,
     ) -> Result<()> {
-        // Group consumers by partition
-        let mut partition_consumers: HashMap<String, Vec<&ConsumerHandle<T>>> = HashMap::new();
-        for handle in consumers.values() {
+        // Group sinks by partition
+        let mut partition_sinks: HashMap<String, Vec<&SinkHandle<T>>> = HashMap::new();
+        for handle in sinks.values() {
             if let Some(ref partition) = handle.partition {
-                partition_consumers
+                partition_sinks
                     .entry(partition.clone())
                     .or_default()
                     .push(handle);
@@ -336,24 +319,15 @@ where
         for event in events {
             let partition = hash_fn(&event);
 
-            if let Some(consumers_in_partition) = partition_consumers.get(&partition) {
+            if let Some(sinks_in_partition) = partition_sinks.get(&partition) {
                 // Within partition, use demand-based routing
-                if let Some(best_consumer) = consumers_in_partition
+                if let Some(best_sink) = sinks_in_partition
                     .iter()
                     .max_by_key(|c| futures::executor::block_on(async { *c.demand.lock().await }))
                 {
-                    let demand = {
-                        let mut consumer_demand = best_consumer.demand.lock().await;
-                        if *consumer_demand > 0 {
-                            *consumer_demand -= 1;
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if demand {
-                        // best_consumer.sender.send(event).await.map_err(|_| Error::ChannelClosed)?;
+                    let mut sink_demand = best_sink.demand.lock().await;
+                    if *sink_demand > 0 {
+                        *sink_demand -= 1;
                     }
                 }
             }
@@ -362,19 +336,19 @@ where
         Ok(())
     }
 
-    /// Spawn a task to run a consumer
-    async fn spawn_consumer_task<C>(
+    /// Spawn a task to run a sink
+    async fn spawn_sink_task<C>(
         &self,
-        mut consumer: C,
+        mut sink: C,
         mut receiver: mpsc::Receiver<T>,
         demand: Arc<Mutex<usize>>,
     ) -> Result<JoinHandle<Result<()>>>
     where
-        C: Consumer<Item = T> + Send + 'static,
+        C: Sink<Item = T> + Send + 'static,
     {
         let handle = tokio::spawn(async move {
             while let Some(item) = receiver.recv().await {
-                consumer.consume(item).await?;
+                sink.consume(item).await?;
 
                 // Increase demand after consuming
                 {
@@ -383,21 +357,21 @@ where
                 }
             }
 
-            consumer.finish().await?;
+            sink.finish().await?;
             Ok(())
         });
 
         Ok(handle)
     }
 
-    /// Get information about all consumers
-    pub async fn consumer_info(&self) -> Vec<ConsumerInfo> {
-        let consumers = self.consumers.lock().await;
+    /// Get information about all sinks
+    pub async fn sink_info(&self) -> Vec<SinkInfo> {
+        let sinks = self.sinks.lock().await;
         let mut info = Vec::new();
 
-        for handle in consumers.values() {
+        for handle in sinks.values() {
             let current_demand = *handle.demand.lock().await;
-            info.push(ConsumerInfo {
+            info.push(SinkInfo {
                 id: handle.id,
                 partition: handle.partition.clone(),
                 current_demand,
@@ -430,7 +404,7 @@ impl<T> DispatcherBuilder<T> {
         self
     }
 
-    /// Set max demand per consumer
+    /// Set max demand per sink
     pub fn max_demand(mut self, demand: usize) -> Self {
         self.config.max_demand = demand;
         self

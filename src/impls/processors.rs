@@ -1,4 +1,7 @@
-//! Concrete processor implementations.
+//! Processor implementations for transforming events.
+//!
+//! This module provides implementations of common processors, such as map processors,
+//! filter processors, and batch processors.
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
@@ -8,7 +11,9 @@ use tokio::time::sleep;
 use crate::error::Result;
 use crate::traits::Processor;
 
-/// A processor that maps items using a function
+/// A processor that maps events using a function.
+///
+/// This processor applies a function to each event.
 pub struct MapProcessor<F, T, U> {
     f: F,
     _phantom: std::marker::PhantomData<(T, U)>,
@@ -39,7 +44,9 @@ where
     }
 }
 
-/// A processor that filters items using a predicate
+/// A processor that filters events using a predicate.
+///
+/// This processor only passes events that satisfy the predicate.
 pub struct FilterProcessor<F, T> {
     predicate: F,
     _phantom: std::marker::PhantomData<T>,
@@ -73,38 +80,9 @@ where
     }
 }
 
-/// A processor that flat maps items
-pub struct FlatMapProcessor<F, T, U> {
-    f: F,
-    _phantom: std::marker::PhantomData<(T, U)>,
-}
-
-impl<F, T, U> FlatMapProcessor<F, T, U> {
-    /// Create a new flat map processor
-    pub fn new(f: F) -> Self {
-        Self {
-            f,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-#[async_trait]
-impl<F, T, U> Processor for FlatMapProcessor<F, T, U>
-where
-    F: FnMut(T) -> Vec<U> + Send + Sync + 'static,
-    T: Send + 'static,
-    U: Send + 'static,
-{
-    type Input = T;
-    type Output = U;
-
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok((self.f)(item))
-    }
-}
-
-/// A processor that batches items
+/// A processor that batches events.
+///
+/// This processor collects events into batches.
 pub struct BatchProcessor<T> {
     batch_size: usize,
     batch: Vec<T>,

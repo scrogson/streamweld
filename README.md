@@ -8,9 +8,9 @@ A Rust implementation inspired by Elixir's GenStage, providing demand-driven dat
 
 ## Features
 
-- **Demand-driven architecture**: Consumers control the flow by pulling data from producers
-- **Automatic backpressure**: Built-in flow control prevents overwhelming slow consumers
-- **Composable pipelines**: Chain producers, processors, and consumers with a fluent API
+- **Demand-driven architecture**: Sinks control the flow by pulling data from sources
+- **Automatic backpressure**: Built-in flow control prevents overwhelming slow sinks
+- **Composable pipelines**: Chain sources, processors, and sinks with a fluent API
 - **Async/await support**: Full integration with Rust's async ecosystem
 - **Type safety**: Leverage Rust's type system for compile-time guarantees
 - **Configurable buffering**: Control memory usage and latency with buffer size settings
@@ -35,20 +35,19 @@ use streamweld::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a producer that generates numbers 1-10
-    let producer = RangeProducer::new(1..11);
+    // Create a source that generates numbers 1-10
+    let source = RangeSource::new(1..11);
 
     // Create a processor that doubles each number
     let processor = MapProcessor::new(|x| x * 2);
 
-    // Create a consumer that prints each item
-    let consumer = PrintConsumer::with_prefix("Result");
+    // Create a sink that prints each item
+    let sink = PrintSink::with_prefix("Result".to_string());
 
     // Build and run the pipeline
-    Pipeline::new(producer)
-        .pipe(processor)
-        .with_buffer_size(5)
-        .sink(consumer)
+    Pipeline::new(source, processor)
+        .buffer_size(5)
+        .sink(sink)
         .await?;
 
     Ok(())
@@ -57,19 +56,20 @@ async fn main() -> Result<()> {
 
 ## Core Concepts
 
-### Producer
+### Source
 
-A `Producer` generates items on demand. Producers are pull-based, meaning they only generate items when explicitly requested by downstream consumers.
+A `Source` generates items on demand. Sources are pull-based, meaning they only generate items when explicitly requested by downstream sinks.
 
 ```rust
-use streamweld::traits::Producer;
+use streamweld::traits::Source;
 
-struct CounterProducer {
+struct CounterSource {
     current: u64,
     max: u64,
 }
 
-impl Producer for CounterProducer {
+#[async_trait::async_trait]
+impl Source for CounterSource {
     type Item = u64;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -84,16 +84,17 @@ impl Producer for CounterProducer {
 }
 ```
 
-### Consumer
+### Sink
 
-A `Consumer` processes items from upstream producers.
+A `Sink` processes items from upstream sources.
 
 ```rust
-use streamweld::traits::Consumer;
+use streamweld::traits::Sink;
 
-struct LogConsumer;
+struct LogSink;
 
-impl Consumer for LogConsumer {
+#[async_trait::async_trait]
+impl Sink for LogSink {
     type Item = String;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -105,13 +106,14 @@ impl Consumer for LogConsumer {
 
 ### Processor
 
-A `Processor` is both a consumer and producer - it transforms items flowing through the pipeline.
+A `Processor` transforms items flowing through the pipeline.
 
 ```rust
 use streamweld::traits::Processor;
 
 struct DoubleProcessor;
 
+#[async_trait::async_trait]
 impl Processor for DoubleProcessor {
     type Input = i32;
     type Output = i32;
@@ -132,18 +134,17 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let producer = RangeProducer::new(1..101);
+    let source = RangeSource::new(1..101);
 
-    let pipeline = Pipeline::new(producer)
-        .pipe(FilterProcessor::new(|x: &i64| x % 2 == 0)) // Even numbers only
+    let pipeline = Pipeline::new(source, FilterProcessor::new(|x: &i64| x % 2 == 0)) // Even numbers only
         .pipe(MapProcessor::new(|x| x * 3))                // Multiply by 3
         .pipe(BatchProcessor::new(5))                      // Group into batches of 5
         .pipe(DelayProcessor::new(Duration::from_millis(100))) // Add delay
-        .with_buffer_size(20)
-        .with_timeout(Duration::from_secs(30))
-        .with_concurrency(4);
+        .buffer_size(20)
+        .timeout(Duration::from_secs(30))
+        .concurrency(4);
 
-    pipeline.sink(PrintConsumer::with_prefix("Batch")).await?;
+    pipeline.sink(PrintSink::with_prefix("Batch".to_string())).await?;
     Ok(())
 }
 ```
@@ -155,7 +156,7 @@ use streamweld::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let producer = /* your producer */;
+    let source = RangeSource::new(1..101);
 
     let error_handler = ErrorHandlingProcessor::new(
         MapProcessor::new(|x: i32| {
@@ -166,18 +167,11 @@ async fn main() -> Result<()> {
         })
     );
 
-    let consumer = consumer_from_fn(|result: Result<String>| async move {
-        match result {
-            Ok(value) => println!("✓ {}", value),
-            Err(e) => println!("✗ Error: {}", e),
-        }
-        Ok(())
-    });
+    let sink = PrintSink::with_prefix("Result".to_string());
 
-    Pipeline::new(producer)
-        .pipe(error_handler)
-        .with_fail_fast(false) // Continue processing on errors
-        .sink(consumer)
+    Pipeline::new(source, error_handler)
+        .fail_fast(false) // Continue processing on errors
+        .sink(sink)
         .await?;
 
     Ok(())
@@ -191,22 +185,20 @@ use streamweld::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let producer = RangeProducer::new(1..1001);
-    let consumer = CollectConsumer::new();
-    let collector_ref = consumer.clone();
+    let source = RangeSource::new(1..1001);
+    let sink = CollectSink::new();
+    let sink_ref = sink.clone();
 
-    let pipeline = ConcurrentPipeline::new(producer, consumer)
-        .with_config(PipelineConfig {
-            buffer_size: 100,
-            max_concurrency: 8,
-            operation_timeout: Some(Duration::from_secs(1)),
-            fail_fast: true,
-        });
+    let pipeline = Pipeline::new(source, NoOpProcessor::new())
+        .buffer_size(100)
+        .concurrency(8)
+        .timeout(Duration::from_secs(1))
+        .fail_fast(true);
 
-    pipeline.run().await?;
+    pipeline.sink(sink).await?;
 
-    let items = collector_ref.items();
-    println!("Processed {} items", items.lock().unwrap().len());
+    let items = sink_ref.items();
+    println!("Processed {} items", items.lock().await.len());
 
     Ok(())
 }
@@ -214,25 +206,25 @@ async fn main() -> Result<()> {
 
 ## Built-in Implementations
 
-### Producers
+### Sources
 
-- `RangeProducer` - Generates numbers from a range
-- `VecProducer` - Yields items from a vector
-- `RepeatProducer` - Repeats a value N times or infinitely
-- `IntervalProducer` - Generates items at timed intervals
-- `ChunkProducer` - Groups items into chunks
-- `MergeProducer` - Merges multiple producers round-robin
-- `FibonacciProducer` - Generates Fibonacci sequence
+- `RangeSource` - Generates numbers from a range
+- `VecSource` - Yields items from a vector
+- `RepeatSource` - Repeats a value N times or infinitely
+- `IntervalSource` - Generates items at timed intervals
+- `ChunkSource` - Groups items into chunks
+- `MergeSource` - Merges multiple sources round-robin
+- `FibonacciSource` - Generates Fibonacci sequence
 
-### Consumers
+### Sinks
 
-- `PrintConsumer` - Prints items to stdout
-- `CollectConsumer` - Collects items into a vector
-- `CountConsumer` - Counts processed items
-- `FileConsumer` - Writes items to a file
-- `BatchConsumer` - Batches items before processing
-- `ThroughputConsumer` - Measures processing throughput
-- `RateLimitedConsumer` - Applies rate limiting
+- `PrintSink` - Prints items to stdout
+- `CollectSink` - Collects items into a vector
+- `CountSink` - Counts processed items
+- `FileSink` - Writes items to a file
+- `BatchSink` - Batches items before processing
+- `ThroughputSink` - Measures processing throughput
+- `RateLimitedSink` - Applies rate limiting
 
 ### Processors
 

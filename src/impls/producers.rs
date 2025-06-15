@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::error::Result;
-use crate::traits::Producer;
+use crate::traits::Source;
 
 /// A producer that generates numbers from a range
-pub struct RangeProducer {
+pub struct RangeSource {
     range: Range<i64>,
 }
 
-impl RangeProducer {
+impl RangeSource {
     /// Create a new range producer
     pub fn new(range: Range<i64>) -> Self {
         Self { range }
@@ -22,7 +22,7 @@ impl RangeProducer {
 }
 
 #[async_trait]
-impl Producer for RangeProducer {
+impl Source for RangeSource {
     type Item = i64;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -35,11 +35,11 @@ impl Producer for RangeProducer {
 }
 
 /// A producer that yields items from a vector
-pub struct VecProducer<T> {
+pub struct VecSource<T> {
     items: VecDeque<T>,
 }
 
-impl<T> VecProducer<T> {
+impl<T> VecSource<T> {
     /// Create a new vector producer
     pub fn new(items: Vec<T>) -> Self {
         Self {
@@ -64,7 +64,7 @@ impl<T> VecProducer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static> Producer for VecProducer<T> {
+impl<T: Send + 'static> Source for VecSource<T> {
     type Item = T;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -73,12 +73,12 @@ impl<T: Send + 'static> Producer for VecProducer<T> {
 }
 
 /// A producer that repeats a single value
-pub struct RepeatProducer<T> {
+pub struct RepeatSource<T> {
     value: T,
     remaining: Option<usize>,
 }
 
-impl<T: Clone> RepeatProducer<T> {
+impl<T: Clone> RepeatSource<T> {
     /// Create a producer that repeats a value indefinitely
     pub fn new(value: T) -> Self {
         Self {
@@ -97,7 +97,7 @@ impl<T: Clone> RepeatProducer<T> {
 }
 
 #[async_trait]
-impl<T: Clone + Send + 'static> Producer for RepeatProducer<T> {
+impl<T: Clone + Send + 'static> Source for RepeatSource<T> {
     type Item = T;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -115,13 +115,13 @@ impl<T: Clone + Send + 'static> Producer for RepeatProducer<T> {
 }
 
 /// A producer that generates items at timed intervals
-pub struct IntervalProducer<P> {
+pub struct IntervalSource<P> {
     inner: P,
     interval: Duration,
     last_produced: Option<Instant>,
 }
 
-impl<P> IntervalProducer<P> {
+impl<P> IntervalSource<P> {
     /// Create a new interval producer
     pub fn new(inner: P, interval: Duration) -> Self {
         Self {
@@ -133,7 +133,7 @@ impl<P> IntervalProducer<P> {
 }
 
 #[async_trait]
-impl<P: Producer + Send> Producer for IntervalProducer<P> {
+impl<P: Source + Send> Source for IntervalSource<P> {
     type Item = P::Item;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -153,13 +153,13 @@ impl<P: Producer + Send> Producer for IntervalProducer<P> {
 }
 
 /// A producer that chunks items from another producer
-pub struct ChunkProducer<P: Producer> {
+pub struct ChunkSource<P: Source> {
     inner: P,
     chunk_size: usize,
     buffer: Vec<P::Item>,
 }
 
-impl<P: Producer> ChunkProducer<P> {
+impl<P: Source> ChunkSource<P> {
     /// Create a new chunk producer
     pub fn new(inner: P, chunk_size: usize) -> Self {
         Self {
@@ -171,7 +171,7 @@ impl<P: Producer> ChunkProducer<P> {
 }
 
 #[async_trait]
-impl<P: Producer + Send> Producer for ChunkProducer<P> {
+impl<P: Source + Send> Source for ChunkSource<P> {
     type Item = Vec<P::Item>;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -195,13 +195,13 @@ impl<P: Producer + Send> Producer for ChunkProducer<P> {
 }
 
 /// A producer that merges items from multiple producers in round-robin fashion
-pub struct MergeProducer<T> {
-    producers: Vec<Box<dyn Producer<Item = T> + Send>>,
+pub struct MergeSource<T> {
+    producers: Vec<Box<dyn Source<Item = T> + Send>>,
     current: usize,
     exhausted: Vec<bool>,
 }
 
-impl<T: Send + 'static> MergeProducer<T> {
+impl<T: Send + 'static> MergeSource<T> {
     /// Create a new merge producer
     pub fn new() -> Self {
         Self {
@@ -214,7 +214,7 @@ impl<T: Send + 'static> MergeProducer<T> {
     /// Add a producer to merge
     pub fn add_producer<P>(mut self, producer: P) -> Self
     where
-        P: Producer<Item = T> + Send + 'static,
+        P: Source<Item = T> + Send + 'static,
     {
         self.producers.push(Box::new(producer));
         self.exhausted.push(false);
@@ -228,7 +228,7 @@ impl<T: Send + 'static> MergeProducer<T> {
 }
 
 #[async_trait]
-impl<T: Send + 'static> Producer for MergeProducer<T> {
+impl<T: Send + 'static> Source for MergeSource<T> {
     type Item = T;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -265,20 +265,20 @@ impl<T: Send + 'static> Producer for MergeProducer<T> {
     }
 }
 
-impl<T: Send + 'static> Default for MergeProducer<T> {
+impl<T: Send + 'static> Default for MergeSource<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// A producer that generates fibonacci numbers
-pub struct FibonacciProducer {
+pub struct FibonacciSource {
     a: u64,
     b: u64,
     count: Option<usize>,
 }
 
-impl FibonacciProducer {
+impl FibonacciSource {
     /// Create an infinite fibonacci producer
     pub fn new() -> Self {
         Self {
@@ -299,7 +299,7 @@ impl FibonacciProducer {
 }
 
 #[async_trait]
-impl Producer for FibonacciProducer {
+impl Source for FibonacciSource {
     type Item = u64;
 
     async fn produce(&mut self) -> Result<Option<Self::Item>> {
@@ -319,7 +319,7 @@ impl Producer for FibonacciProducer {
     }
 }
 
-impl Default for FibonacciProducer {
+impl Default for FibonacciSource {
     fn default() -> Self {
         Self::new()
     }

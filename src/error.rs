@@ -1,16 +1,16 @@
-//! Error types for the producer/consumer system.
+//! Error types for the source/sink system.
 
 use std::fmt;
 use std::sync::Arc;
 
-/// The main error type for the producer/consumer system.
+/// The main error type for the source/sink system.
 #[derive(Debug, Clone)]
 pub enum Error {
-    /// A producer failed to generate an item
-    Producer(Arc<dyn std::error::Error + Send + Sync>),
+    /// A source failed to generate an item
+    Source(Arc<dyn std::error::Error + Send + Sync>),
 
-    /// A consumer failed to process an item
-    Consumer(Arc<dyn std::error::Error + Send + Sync>),
+    /// A sink failed to process an item
+    Sink(Arc<dyn std::error::Error + Send + Sync>),
 
     /// A processor failed to transform an item
     Processor(Arc<dyn std::error::Error + Send + Sync>),
@@ -37,8 +37,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Producer(e) => write!(f, "Producer error: {}", e),
-            Error::Consumer(e) => write!(f, "Consumer error: {}", e),
+            Error::Source(e) => write!(f, "Source error: {}", e),
+            Error::Sink(e) => write!(f, "Sink error: {}", e),
             Error::Processor(e) => write!(f, "Processor error: {}", e),
             Error::Shutdown => write!(f, "Pipeline was shut down"),
             Error::ChannelClosed => write!(f, "Channel was closed unexpectedly"),
@@ -66,8 +66,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Producer(e) => Some(e.as_ref()),
-            Error::Consumer(e) => Some(e.as_ref()),
+            Error::Source(e) => Some(e.as_ref()),
+            Error::Sink(e) => Some(e.as_ref()),
             Error::Processor(e) => Some(e.as_ref()),
             _ => None,
         }
@@ -76,14 +76,14 @@ impl std::error::Error for Error {
 
 // Convenience constructors
 impl Error {
-    /// Create a producer error from any error type
-    pub fn producer<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
-        Error::Producer(Arc::new(error))
+    /// Create a source error from any error type
+    pub fn source<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
+        Error::Source(Arc::new(error))
     }
 
-    /// Create a consumer error from any error type  
-    pub fn consumer<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
-        Error::Consumer(Arc::new(error))
+    /// Create a sink error from any error type
+    pub fn sink<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
+        Error::Sink(Arc::new(error))
     }
 
     /// Create a processor error from any error type
@@ -149,8 +149,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Helper trait for converting errors into our Error type
 pub trait IntoError<T> {
-    fn into_producer_error(self) -> Result<T>;
-    fn into_consumer_error(self) -> Result<T>;
+    fn into_source_error(self) -> Result<T>;
+    fn into_sink_error(self) -> Result<T>;
     fn into_processor_error(self) -> Result<T>;
 }
 
@@ -158,12 +158,12 @@ impl<T, E> IntoError<T> for std::result::Result<T, E>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    fn into_producer_error(self) -> Result<T> {
-        self.map_err(Error::producer)
+    fn into_source_error(self) -> Result<T> {
+        self.map_err(Error::source)
     }
 
-    fn into_consumer_error(self) -> Result<T> {
-        self.map_err(Error::consumer)
+    fn into_sink_error(self) -> Result<T> {
+        self.map_err(Error::sink)
     }
 
     fn into_processor_error(self) -> Result<T> {
