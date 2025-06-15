@@ -506,28 +506,58 @@ pub mod metrics {
 
 pub struct StreamWithTimeout<S> {
     stream: S,
-    _timeout: std::time::Duration,
+    timeout_duration: std::time::Duration,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
 }
 
 impl<S> StreamWithTimeout<S> {
     pub fn new(stream: S, timeout: std::time::Duration) -> Self {
         Self {
             stream,
-            _timeout: timeout,
+            timeout_duration: timeout,
+            deadline: None,
         }
     }
 }
 
 impl<S: Stream + Send + Sync + Unpin> Stream for StreamWithTimeout<S> {
-    type Item = S::Item;
+    type Item = Result<S::Item>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<<StreamWithTimeout<S> as Stream>::Item>> {
-        // For now, just delegate to the inner stream
-        // TODO: Implement timeout logic
-        Pin::new(&mut self.stream).poll_next(cx)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+
+        // Initialize deadline timer if not already set
+        if this.deadline.is_none() {
+            this.deadline = Some(Box::pin(tokio::time::sleep(this.timeout_duration)));
+        }
+
+        // Check if the deadline has expired
+        if let Some(deadline) = &mut this.deadline {
+            if deadline.as_mut().poll(cx).is_ready() {
+                // Timeout occurred - reset deadline for next item and return error
+                this.deadline = Some(Box::pin(tokio::time::sleep(this.timeout_duration)));
+                return Poll::Ready(Some(Err(crate::core::error::Error::Timeout {
+                    duration_ms: this.timeout_duration.as_millis() as u64,
+                })));
+            }
+        }
+
+        // Poll the underlying stream
+        match Pin::new(&mut this.stream).poll_next(cx) {
+            Poll::Ready(Some(item)) => {
+                // Item received - reset deadline for next item
+                this.deadline = Some(Box::pin(tokio::time::sleep(this.timeout_duration)));
+                Poll::Ready(Some(Ok(item)))
+            }
+            Poll::Ready(None) => {
+                // Stream ended
+                Poll::Ready(None)
+            }
+            Poll::Pending => {
+                // Still waiting for next item, keep deadline active
+                Poll::Pending
+            }
+        }
     }
 }
 
@@ -547,7 +577,7 @@ where
 pub async fn stream_into_vec_with_timeout<S>(
     stream: S,
     timeout: std::time::Duration,
-) -> Vec<S::Item>
+) -> Vec<Result<S::Item>>
 where
     S: Stream + Send + Sync + Unpin,
     S::Item: Send,
@@ -560,7 +590,7 @@ pub async fn stream_into_vec_with_timeout_and_channel<S, T>(
     stream: S,
     timeout: std::time::Duration,
     _channel: mpsc::Sender<T>,
-) -> Vec<S::Item>
+) -> Vec<Result<S::Item>>
 where
     S: Stream + Send + Sync + Unpin,
     S::Item: Send,
@@ -579,7 +609,7 @@ pub async fn stream_into_vec_with_timeout_and_channel_and_handle<S, T>(
     stream: S,
     timeout: std::time::Duration,
     channel: mpsc::Sender<T>,
-) -> (Vec<S::Item>, JoinHandle<()>)
+) -> (Vec<Result<S::Item>>, JoinHandle<()>)
 where
     S: Stream + Send + Sync + Unpin,
     S::Item: Send,
@@ -603,7 +633,7 @@ pub async fn stream_into_vec_with_timeout_and_channel_and_handle_and_future<S, T
     timeout: std::time::Duration,
     channel: mpsc::Sender<T>,
     future: F,
-) -> (Vec<S::Item>, JoinHandle<()>)
+) -> (Vec<Result<S::Item>>, JoinHandle<()>)
 where
     S: Stream + Send + Sync + Unpin,
     S::Item: Send,

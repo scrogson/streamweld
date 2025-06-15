@@ -1,17 +1,22 @@
 //! Integration tests for the GenStage-inspired source/sink system
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use streamweld::core::SourceExt;
 use streamweld::prelude::*;
 use streamweld::sources::MergeSource;
+use streamweld::utils::StreamWithTimeout;
+use tokio_stream::{Stream, StreamExt as TokioStreamExt};
 
 #[tokio::test]
 async fn test_basic_pipeline() -> Result<()> {
     let source = RangeSource::new(0..10);
-    let _processor = NoOpProcessor::<i64>::new();
+    let processor = NoOpProcessor::<i64>::new();
     let sink = PrintSink::with_prefix("Test: ".to_string());
 
-    Pipeline::new(source, _processor)
+    Pipeline::new(source, processor)
         .buffer_size(5)
         .sink(sink)
         .await?;
@@ -319,4 +324,159 @@ async fn test_pipeline_shutdown() {
     let items = collector_ref.items();
     let collected = items.lock().await;
     assert_eq!(*collected, vec![1, 2, 3, 4, 5]);
+}
+
+// Helper struct for creating delayed streams in tests
+struct DelayedStream {
+    items: Vec<i32>,
+    delay: Duration,
+    index: usize,
+    sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl DelayedStream {
+    fn new(items: Vec<i32>, delay: Duration) -> Self {
+        Self {
+            items,
+            delay,
+            index: 0,
+            sleep: None,
+        }
+    }
+}
+
+impl Stream for DelayedStream {
+    type Item = i32;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+
+        if this.index >= this.items.len() {
+            return Poll::Ready(None);
+        }
+
+        // Initialize sleep if not set
+        if this.sleep.is_none() {
+            this.sleep = Some(Box::pin(tokio::time::sleep(this.delay)));
+        }
+
+        // Check if sleep is ready
+        if let Some(sleep) = &mut this.sleep {
+            match sleep.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    let item = this.items[this.index];
+                    this.index += 1;
+                    this.sleep = None; // Reset for next item
+                    Poll::Ready(Some(item))
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_stream_with_timeout_normal_operation() {
+    let items = vec![1, 2, 3, 4, 5];
+    let stream = DelayedStream::new(items.clone(), Duration::from_millis(10));
+    let timeout_stream = StreamWithTimeout::new(stream, Duration::from_millis(50));
+
+    let collected: Vec<_> = timeout_stream.collect().await;
+
+    assert_eq!(collected.len(), 5);
+    for (i, result) in collected.into_iter().enumerate() {
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), items[i]);
+    }
+}
+
+#[tokio::test]
+async fn test_stream_with_timeout_timeout_occurs() {
+    let items = vec![1, 2, 3];
+    let stream = DelayedStream::new(items, Duration::from_millis(100)); // Slow stream
+    let timeout_stream = StreamWithTimeout::new(stream, Duration::from_millis(20)); // Short timeout
+
+    let collected: Vec<_> = timeout_stream.collect().await;
+
+    // Should get at least one timeout error
+    assert!(!collected.is_empty());
+    let timeout_found = collected
+        .iter()
+        .any(|result| matches!(result, Err(streamweld::core::error::Error::Timeout { .. })));
+    assert!(timeout_found, "Expected to find at least one timeout error");
+}
+
+#[tokio::test]
+async fn test_stream_with_timeout_reset_after_item() {
+    let items = vec![1, 2, 3];
+    let stream = DelayedStream::new(items.clone(), Duration::from_millis(30));
+    let timeout_stream = StreamWithTimeout::new(stream, Duration::from_millis(50)); // Longer than delay
+
+    let collected: Vec<_> = timeout_stream.collect().await;
+
+    // All items should be received successfully since each delay is within timeout
+    assert_eq!(collected.len(), 3);
+    for (i, result) in collected.into_iter().enumerate() {
+        assert!(result.is_ok(), "Item {} should not timeout", i);
+        assert_eq!(result.unwrap(), items[i]);
+    }
+}
+
+#[tokio::test]
+async fn test_stream_with_timeout_empty_stream() {
+    let items = vec![];
+    let stream = DelayedStream::new(items, Duration::from_millis(10));
+    let timeout_stream = StreamWithTimeout::new(stream, Duration::from_millis(50));
+
+    let collected: Vec<_> = timeout_stream.collect().await;
+
+    assert!(collected.is_empty());
+}
+
+// Helper struct for streams that hang indefinitely
+struct HangingStream {
+    sent_first: bool,
+}
+
+impl HangingStream {
+    fn new() -> Self {
+        Self { sent_first: false }
+    }
+}
+
+impl Stream for HangingStream {
+    type Item = i32;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if !self.sent_first {
+            self.sent_first = true;
+            Poll::Ready(Some(42))
+        } else {
+            // Hang forever after first item
+            Poll::Pending
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_stream_with_timeout_hanging_stream() {
+    let stream = HangingStream::new();
+    let timeout_stream = StreamWithTimeout::new(stream, Duration::from_millis(50));
+
+    let collected: Vec<_> = timeout_stream.take(3).collect().await;
+
+    // Should get first item successfully, then timeout errors
+    assert_eq!(collected.len(), 3);
+    assert!(collected[0].is_ok());
+    assert_eq!(collected[0].as_ref().unwrap(), &42);
+
+    // Subsequent items should be timeout errors
+    for result in collected.iter().skip(1) {
+        assert!(matches!(
+            result,
+            Err(streamweld::core::error::Error::Timeout { .. })
+        ));
+    }
 }
