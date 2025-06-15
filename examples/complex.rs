@@ -193,7 +193,7 @@ impl Processor for CombinedProcessor {
         for item in items {
             // Convert i64 to DataRecord
             let record = DataRecord {
-                id: item as i64,
+                id: item,
                 value: item as f64,
                 timestamp: std::time::SystemTime::now(),
                 category: "default".to_string(),
@@ -207,7 +207,7 @@ impl Processor for CombinedProcessor {
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         // Convert i64 to DataRecord
         let record = DataRecord {
-            id: item as i64,
+            id: item,
             value: item as f64,
             timestamp: std::time::SystemTime::now(),
             category: "default".to_string(),

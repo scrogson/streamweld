@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let processor = MapProcessor::new(|x: i64| x * 2);
     let sink = PrintSink::with_prefix("Processed: ".to_string());
 
-    let _pipeline = Pipeline::new(source, processor)
+    Pipeline::new(source, processor)
         .buffer_size(5)
         .sink(sink)
         .await?;

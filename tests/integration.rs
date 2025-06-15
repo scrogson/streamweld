@@ -11,7 +11,7 @@ async fn test_basic_pipeline() -> Result<()> {
     let _processor = NoOpProcessor::<i64>::new();
     let sink = PrintSink::with_prefix("Test: ".to_string());
 
-    let _pipeline = Pipeline::new(source, _processor)
+    Pipeline::new(source, _processor)
         .buffer_size(5)
         .sink(sink)
         .await?;

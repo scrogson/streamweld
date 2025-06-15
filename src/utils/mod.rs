@@ -294,14 +294,11 @@ impl CircuitBreaker {
     /// Record a successful operation
     pub fn record_success(&mut self) {
         self.failure_count = 0;
-        match self.state {
-            CircuitBreakerState::HalfOpen => {
-                self.success_count += 1;
-                if self.success_count >= self.success_threshold {
-                    self.state = CircuitBreakerState::Closed;
-                }
+        if self.state == CircuitBreakerState::HalfOpen {
+            self.success_count += 1;
+            if self.success_count >= self.success_threshold {
+                self.state = CircuitBreakerState::Closed;
             }
-            _ => {}
         }
     }
 

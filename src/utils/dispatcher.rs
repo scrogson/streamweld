@@ -166,11 +166,8 @@ where
         sinks.insert(sink_id, handle);
 
         // Handle dispatcher-specific subscription logic
-        match &self.dispatcher_type {
-            DispatcherType::Custom(dispatcher) => {
-                dispatcher.subscribe(sink_id, partition)?;
-            }
-            _ => {} // Built-in dispatchers handle this automatically
+        if let DispatcherType::Custom(dispatcher) = &self.dispatcher_type {
+            dispatcher.subscribe(sink_id, partition)?;
         }
 
         Ok(sink_id)
@@ -182,11 +179,8 @@ where
 
         if sinks.remove(&sink_id).is_some() {
             // Handle dispatcher-specific unsubscription logic
-            match &self.dispatcher_type {
-                DispatcherType::Custom(dispatcher) => {
-                    dispatcher.unsubscribe(sink_id)?;
-                }
-                _ => {}
+            if let DispatcherType::Custom(dispatcher) = &self.dispatcher_type {
+                dispatcher.unsubscribe(sink_id)?;
             }
         }
 
