@@ -1,4 +1,4 @@
-# Streamweld
+# StreamWeld
 
 A Rust implementation inspired by Elixir's GenStage, providing demand-driven data processing pipelines with automatic backpressure control.
 

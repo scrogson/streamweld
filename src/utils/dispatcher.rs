@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::error::Result;
-use crate::traits::Sink;
+use crate::core::error::Result;
+use crate::core::traits::Sink;
 
 /// Configuration for dispatcher behavior
 pub struct DispatcherConfig {

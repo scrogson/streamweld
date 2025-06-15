@@ -1,8 +1,8 @@
 //! Integration tests for the GenStage-inspired producer/consumer system
 
 use std::time::Duration;
+use streamweld::core::SourceExt;
 use streamweld::prelude::*;
-use streamweld::traits::SourceExt;
 
 #[tokio::test]
 async fn test_basic_pipeline() -> Result<()> {
@@ -113,7 +113,7 @@ async fn test_combinators() {
 #[tokio::test]
 async fn test_concurrent_pipeline() {
     let source = RangeSource::new(1..101);
-    let sink = CollectSink::new();
+    let sink: CollectSink<i64> = CollectSink::new();
     let sink_ref = sink.clone();
 
     let pipeline = ConcurrentPipeline::new(source, sink)
@@ -135,7 +135,7 @@ async fn test_concurrent_pipeline() {
 #[tokio::test]
 async fn test_error_handling() {
     // Create a source that produces all items, including a special error value
-    let source = streamweld::util::from_fn(|| async {
+    let source = streamweld::utils::from_fn(|| async {
         static mut COUNTER: i32 = 0;
         unsafe {
             COUNTER += 1;
@@ -191,7 +191,7 @@ async fn test_error_handling() {
 
 #[tokio::test]
 async fn test_pipeline_timeout() {
-    let source = streamweld::util::from_fn(|| async {
+    let source = streamweld::utils::from_fn(|| async {
         // Simulate slow production
         tokio::time::sleep(Duration::from_millis(100)).await;
         Ok(Some(42))

@@ -3,14 +3,13 @@
 //! Run with: cargo run --example complex_pipeline
 
 use std::time::Duration;
-use streamweld::error::{Error, Result};
-use streamweld::impls::consumers::{CollectSink, PrintSink, ThroughputSink};
-use streamweld::impls::processors::{
+use streamweld::core::{Error, Processor, Result};
+use streamweld::pipeline::Pipeline;
+use streamweld::processors::{
     DelayProcessor, ErrorHandlingProcessor, FilterProcessor, MapProcessor,
 };
-use streamweld::impls::producers::RangeSource;
-use streamweld::prelude::Pipeline;
-use streamweld::traits::Processor;
+use streamweld::sinks::{CollectSink, PrintSink, ThroughputSink};
+use streamweld::sources::RangeSource;
 // use rand::distributions::uniform::SampleUniform; // Uncomment if needed
 // extern crate rand;
 
@@ -197,7 +196,7 @@ async fn concurrent_with_error_handling() -> Result<()> {
     println!("=== Concurrent Processing with Error Handling ===");
 
     // Source that occasionally fails
-    let source = streamweld::util::from_fn(|| async {
+    let source = streamweld::utils::from_fn(|| async {
         static mut COUNTER: i32 = 0;
         unsafe {
             COUNTER += 1;
@@ -222,7 +221,7 @@ async fn concurrent_with_error_handling() -> Result<()> {
         ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Processed: {}", x * 2)));
 
     // Sink that handles both success and error cases
-    let sink = streamweld::util::sink_from_fn(|result: Result<String>| async move {
+    let sink = streamweld::utils::sink_from_fn(|result: Result<String>| async move {
         match result {
             Ok(value) => println!("✅ {}", value),
             Err(e) => println!("❌ Error: {}", e),
@@ -361,7 +360,7 @@ async fn fan_out_example() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("GenStage-Rust Complex Pipeline Examples\n");
+    println!("StreamWeld Complex Pipeline Examples\n");
 
     data_processing_pipeline().await?;
     concurrent_with_error_handling().await?;

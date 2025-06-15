@@ -3,7 +3,7 @@
 //! This module defines the fundamental abstractions that enable demand-driven
 //! data processing pipelines with automatic backpressure control.
 
-use crate::error::Result;
+use crate::core::error::Result;
 use async_trait::async_trait;
 
 /// A source generates items on demand.
@@ -15,8 +15,7 @@ use async_trait::async_trait;
 ///
 /// ```rust
 /// use async_trait::async_trait;
-/// use streamweld::error::Result;
-/// use streamweld::traits::Source;
+/// use streamweld::core::{Result, Source};
 ///
 /// struct CounterSource {
 ///     current: u64,
@@ -59,8 +58,7 @@ pub trait Source {
 ///
 /// ```rust
 /// use async_trait::async_trait;
-/// use streamweld::error::Result;
-/// use streamweld::traits::Sink;
+/// use streamweld::core::{Result, Sink};
 ///
 /// struct LogSink;
 ///
@@ -102,8 +100,7 @@ pub trait Sink {
 ///
 /// ```rust
 /// use async_trait::async_trait;
-/// use streamweld::error::Result;
-/// use streamweld::traits::Processor;
+/// use streamweld::core::{Result, Processor};
 ///
 /// struct DoubleProcessor;
 ///

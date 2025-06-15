@@ -3,11 +3,11 @@
 //! This module provides example implementations of simple sources, sinks, and processors
 //! that can be used to build processing pipelines.
 
-use streamweld::error::Result;
-use streamweld::impls::consumers::PrintSink;
-use streamweld::impls::processors::MapProcessor;
-use streamweld::impls::producers::RangeSource;
+use streamweld::core::Result;
 use streamweld::pipeline::Pipeline;
+use streamweld::processors::MapProcessor;
+use streamweld::sinks::PrintSink;
+use streamweld::sources::RangeSource;
 
 #[tokio::main]
 async fn main() -> Result<()> {

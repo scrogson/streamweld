@@ -1,4 +1,6 @@
-//! Utility functions and helper types.
+//! Utility functions and helpers for the streamweld library.
+
+pub mod dispatcher;
 
 use async_trait::async_trait;
 use std::future::Future;
@@ -10,8 +12,8 @@ use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::Result;
-use crate::traits::{Processor, Sink, Source};
+use crate::core::error::Result;
+use crate::core::traits::{Processor, Sink, Source};
 
 /// Helper function to create a simple source from a function
 pub fn from_fn<F, Fut, T>(f: F) -> FnSource<F, Fut, T>
@@ -153,7 +155,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Check if cancellation was requested
         if self.token.is_cancelled() {
-            return Poll::Ready(Err(crate::error::Error::Shutdown));
+            return Poll::Ready(Err(crate::core::error::Error::Shutdown));
         }
 
         // Poll the inner future

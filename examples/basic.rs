@@ -1,4 +1,4 @@
-//! Basic usage examples for GenStage-Rust
+//! Basic usage examples for StreamWeld
 //!
 //! Run with: cargo run --example basic_usage
 
@@ -9,10 +9,10 @@ use streamweld::prelude::*;
 struct DebugPrintSink;
 
 #[async_trait::async_trait]
-impl streamweld::traits::Sink for DebugPrintSink {
+impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
-    async fn consume(&mut self, item: Self::Item) -> streamweld::error::Result<()> {
+    async fn consume(&mut self, item: Self::Item) -> streamweld::core::Result<()> {
         println!("Batch: {:?}", item);
         Ok(())
     }
@@ -55,7 +55,7 @@ async fn functional_example() -> Result<()> {
     println!("=== Functional Components ===");
 
     // Create a source from a function
-    let source = streamweld::util::from_fn(|| async {
+    let source = streamweld::utils::from_fn(|| async {
         static mut COUNTER: i32 = 0;
         unsafe {
             COUNTER += 1;
@@ -68,7 +68,7 @@ async fn functional_example() -> Result<()> {
     });
 
     // Create a sink from a function
-    let sink = streamweld::util::sink_from_fn(|item: String| async move {
+    let sink = streamweld::utils::sink_from_fn(|item: String| async move {
         println!("Processed: {}", item.to_uppercase());
         Ok(())
     });
@@ -171,7 +171,7 @@ async fn combinators_example() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("GenStage-Rust Basic Usage Examples\n");
+    println!("StreamWeld Basic Usage Examples\n");
 
     simple_example().await?;
     transform_filter_example().await?;

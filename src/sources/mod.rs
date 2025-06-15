@@ -1,4 +1,7 @@
-//! Concrete producer implementations.
+//! Source implementations for the streamweld library.
+//!
+//! This module provides concrete implementations of sources that generate data
+//! for processing pipelines.
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
@@ -6,8 +9,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-use crate::error::Result;
-use crate::traits::Source;
+use crate::core::{Result, Source};
 
 /// A producer that generates numbers from a range
 pub struct RangeSource {

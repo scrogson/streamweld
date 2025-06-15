@@ -29,23 +29,27 @@
 //! }
 //! ```
 
-pub mod dispatcher;
-pub mod error;
-pub mod impls;
+pub mod core;
 pub mod pipeline;
-pub mod traits;
-pub mod util;
+pub mod processors;
+pub mod sinks;
+pub mod sources;
+pub mod utils;
 
 // Re-export commonly used items
 pub mod prelude {
-    pub use crate::error::{Error, Result};
-    pub use crate::impls::{consumers::*, processors::*, producers::*};
-    pub use crate::pipeline::{ConcurrentPipeline, Pipeline, PipelineConfig, PipelineExt};
-    pub use crate::traits::{Processor, Sink, SinkExt, Source, SourceExt};
+    pub use crate::core::{Error, Processor, Result, Sink, SinkExt, Source, SourceExt};
+    pub use crate::pipeline::{
+        dispatcher::{DispatchedPipeline, DispatchedPipelineBuilder, DispatcherSink},
+        ConcurrentPipeline, Pipeline, PipelineConfig, PipelineExt,
+    };
+    pub use crate::processors::*;
+    pub use crate::sinks::*;
+    pub use crate::sources::*;
 }
 
 // Re-export main error type
-pub use error::{Error, Result};
+pub use core::{Error, Result};
 
 // Feature flags for optional dependencies
 #[cfg(feature = "metrics")]

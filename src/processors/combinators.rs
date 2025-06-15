@@ -1,8 +1,9 @@
 //! Implementations of trait combinators defined in the traits module.
 
-use crate::error::Result;
-use crate::traits::{Chain, Contramap, Filter, Map, Sink, Source, Take};
 use async_trait::async_trait;
+
+use crate::core::traits::{Chain, Contramap, Filter, Map, Take};
+use crate::core::{Result, Sink, Source};
 
 // Map combinator implementation
 #[async_trait]
@@ -117,8 +118,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::impls::producers::RangeSource;
-    use crate::traits::SourceExt;
+    use crate::core::SourceExt;
+    use crate::sources::RangeSource;
 
     #[tokio::test]
     async fn test_map_combinator() {

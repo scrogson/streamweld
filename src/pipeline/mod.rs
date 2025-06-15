@@ -3,10 +3,12 @@
 //! This module provides the core pipeline abstraction that connects sources,
 //! processors, and sinks with configurable backpressure and concurrency control.
 
-use crate::error::{Error, Result};
-use crate::traits::{Processor, Sink, Source};
+pub mod dispatcher;
+
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+use crate::core::{Error, Processor, Result, Sink, Source};
 
 /// Configuration for pipeline execution
 #[derive(Clone)]

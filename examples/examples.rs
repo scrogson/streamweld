@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 use streamweld::prelude::*;
-use streamweld::util::sink_from_fn;
-use streamweld::util::{from_fn, processor_from_fn};
+use streamweld::utils::sink_from_fn;
+use streamweld::utils::{from_fn, processor_from_fn};
 use streamweld::Result;
 use tokio::time::sleep;
 
@@ -54,7 +54,7 @@ impl MultiStageProcessor {
 }
 
 #[async_trait::async_trait]
-impl streamweld::traits::Processor for MultiStageProcessor {
+impl streamweld::core::Processor for MultiStageProcessor {
     type Input = i64;
     type Output = Vec<i64>;
 
@@ -88,7 +88,7 @@ impl streamweld::traits::Processor for MultiStageProcessor {
 struct DebugPrintSink;
 
 #[async_trait::async_trait]
-impl streamweld::traits::Sink for DebugPrintSink {
+impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
     async fn consume(&mut self, item: Self::Item) -> Result<()> {
@@ -143,7 +143,7 @@ pub async fn concurrent_collection_example() -> Result<()> {
     println!("=== Concurrent Collection Example ===");
 
     let source = RangeSource::new(1..101);
-    let collector = CollectSink::new();
+    let collector: CollectSink<i64> = CollectSink::new();
     let collector_ref = collector.clone();
 
     // Use builder pattern for config

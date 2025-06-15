@@ -1,10 +1,11 @@
-//! Sink implementations for common event sinks.
+//! Sink implementations for the streamweld library.
 //!
-//! This module provides implementations of common sinks, such as print sinks,
-//! collect sinks, and function sinks.
+//! This module provides concrete implementations of sinks that consume data
+//! from processing pipelines.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,9 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::sleep;
 
-use crate::error::Result;
-use crate::traits::Sink;
-use std::fmt::Display;
+use crate::core::{Result, Sink};
 
 /// A sink that prints events to stdout.
 ///
@@ -216,7 +215,7 @@ impl<T: Send + 'static + Display> Sink for FileSink<T> {
         self.writer
             .write_all(format!("{}\n", item).as_bytes())
             .await
-            .map_err(|e| crate::error::Error::custom(format!("File write error: {}", e)))?;
+            .map_err(|e| crate::core::error::Error::custom(format!("File write error: {}", e)))?;
         Ok(())
     }
 

@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use streamweld::dispatcher::*;
-use streamweld::impls::MapProcessor;
-use streamweld::impls::PrintSink;
-use streamweld::impls::RangeSource;
 use streamweld::prelude::*;
+use streamweld::processors::MapProcessor;
+use streamweld::sinks::PrintSink;
+use streamweld::sources::RangeSource;
+use streamweld::utils::dispatcher::*;
 use tokio::time::sleep;
 
 /// Example data type for demonstrations
@@ -50,19 +50,19 @@ async fn demand_dispatcher_example() -> Result<()> {
         .demand();
 
     // Create multiple sinks with different processing speeds
-    let fast_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let fast_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🏃 Fast sink processing: {}", item.data);
         sleep(Duration::from_millis(50)).await; // Fast processing
         Ok(())
     });
 
-    let slow_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let slow_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🐌 Slow sink processing: {}", item.data);
         sleep(Duration::from_millis(200)).await; // Slow processing
         Ok(())
     });
 
-    let medium_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let medium_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🚶 Medium sink processing: {}", item.data);
         sleep(Duration::from_millis(100)).await; // Medium processing
         Ok(())
@@ -105,17 +105,17 @@ async fn broadcast_dispatcher_example() -> Result<()> {
     let dispatcher = DispatcherBuilder::new().buffer_size(10).broadcast();
 
     // Create multiple sinks for different purposes
-    let logger_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let logger_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("📝 Logger: Recorded {}", item.data);
         Ok(())
     });
 
-    let metrics_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let metrics_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("📊 Metrics: Counting item in category '{}'", item.category);
         Ok(())
     });
 
-    let backup_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let backup_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("💾 Backup: Archiving item {}", item.id);
         Ok(())
     });
@@ -145,12 +145,12 @@ async fn broadcast_with_selector_example() -> Result<()> {
     println!("=== Broadcast with Selector Example (Filtered Fan-out) ===");
 
     // Create sinks with selectors for different categories
-    let important_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let important_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🚨 Important handler: {}", item.data);
         Ok(())
     });
 
-    let normal_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let normal_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("📋 Normal handler: {}", item.data);
         Ok(())
     });
@@ -204,17 +204,17 @@ async fn partition_dispatcher_example() -> Result<()> {
     });
 
     // Create sinks for each partition
-    let sink_a = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let sink_a = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🅰️  Partition A sink: {}", item.data);
         Ok(())
     });
 
-    let sink_b = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let sink_b = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🅱️  Partition B sink: {}", item.data);
         Ok(())
     });
 
-    let sink_c = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let sink_c = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🅲  Partition C sink: {}", item.data);
         Ok(())
     });
@@ -332,12 +332,12 @@ async fn custom_dispatcher_example() -> Result<()> {
     let dispatcher = DispatcherBuilder::new().custom(custom_dispatcher);
 
     // Subscribe sinks to different priority levels
-    let high_priority_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let high_priority_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("🔥 High priority sink: {}", item.data);
         Ok(())
     });
 
-    let low_priority_sink = streamweld::util::sink_from_fn(|item: WorkItem| async move {
+    let low_priority_sink = streamweld::utils::sink_from_fn(|item: WorkItem| async move {
         println!("📝 Low priority sink: {}", item.data);
         Ok(())
     });
@@ -404,7 +404,7 @@ async fn pipeline_with_dispatcher_example() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("GenStage-Rust Dispatcher Examples\n");
+    println!("StreamWeld Dispatcher Examples\n");
 
     demand_dispatcher_example().await?;
     broadcast_dispatcher_example().await?;

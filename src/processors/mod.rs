@@ -1,15 +1,16 @@
-//! Processor implementations for transforming events.
+//! Processor implementations for the streamweld library.
 //!
-//! This module provides implementations of common processors, such as map processors,
-//! filter processors, and batch processors.
+//! This module provides concrete implementations of processors that transform data
+//! flowing through processing pipelines.
+
+pub mod combinators;
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-use crate::error::Result;
-use crate::traits::Processor;
+use crate::core::{Processor, Result};
 
 /// A processor that maps events using a function.
 ///
