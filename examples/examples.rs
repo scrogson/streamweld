@@ -150,11 +150,11 @@ pub async fn complex_pipeline_example() -> Result<()> {
 pub async fn fibonacci_rate_limited_example() -> Result<()> {
     println!("=== Fibonacci Rate Limited Example ===");
 
-    let source = FibonacciSource::with_limit(10);
-    let rate_limiter = RateLimitProcessor::new(2); // 2 per second
+    let source = FibonacciSource::with_limit(5); // Reduced to 5 items
+    let rate_limiter = RateLimitProcessor::new(3); // Increased to 3 per second
     let sink = PrintSink::<u64>::with_prefix("Fib".to_string());
 
-    let pipeline = Pipeline::new(source, rate_limiter).operation_timeout(Duration::from_secs(1));
+    let pipeline = Pipeline::new(source, rate_limiter).operation_timeout(Duration::from_secs(3)); // Increased timeout
 
     let start = std::time::Instant::now();
     pipeline.sink(sink).await?;
@@ -198,25 +198,27 @@ pub async fn concurrent_collection_example() -> Result<()> {
 pub async fn error_handling_example() -> Result<()> {
     println!("=== Error Handling Example ===");
 
-    // Create a source that sometimes fails
+    // Create a source that produces values
     let source = from_fn(|| async {
         use std::sync::atomic::{AtomicI32, Ordering};
         static COUNTER: AtomicI32 = AtomicI32::new(0);
 
         let count = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-        if count % 3 == 0 {
-            // Simulate occasional errors
-            Err(Error::custom("Simulated error"))
-        } else if count > 10 {
+        if count > 10 {
             Ok(None) // End production
         } else {
             Ok(Some(count))
         }
     });
 
-    // Wrap in error handling
-    let error_handler =
-        ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Value: {}", x)));
+    // Wrap in error handling processor that simulates failures
+    let error_handler = ErrorHandlingProcessor::new(processor_from_fn(|x: i32| async move {
+        // Simulate occasional errors
+        if x % 3 == 0 {
+            return Err(Error::custom("Simulated error"));
+        }
+        Ok(vec![format!("Value: {}", x)])
+    }));
 
     let sink = into_fn(|result: Result<String>| async move {
         match result {
