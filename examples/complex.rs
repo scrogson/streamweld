@@ -249,23 +249,20 @@ async fn concurrent_with_error_handling() -> Result<()> {
 
     // Source that occasionally fails
     let source = streamweld::utils::from_fn(|| async {
-        static mut COUNTER: i32 = 0;
-        unsafe {
-            COUNTER += 1;
-            if COUNTER > 20 {
-                return Ok(None);
-            }
+        use std::sync::atomic::{AtomicI32, Ordering};
+        static COUNTER: AtomicI32 = AtomicI32::new(0);
 
-            // Simulate occasional failures
-            if COUNTER % 7 == 0 {
-                return Err(Error::custom(format!(
-                    "Simulated error at item {}",
-                    COUNTER
-                )));
-            }
-
-            Ok(Some(COUNTER))
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+        if count > 20 {
+            return Ok(None);
         }
+
+        // Simulate occasional failures
+        if count % 7 == 0 {
+            return Err(Error::custom(format!("Simulated error at item {}", count)));
+        }
+
+        Ok(Some(count))
     });
 
     // Error handling processor

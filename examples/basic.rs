@@ -64,14 +64,14 @@ async fn functional_example() -> Result<()> {
 
     // Create a source from a function
     let source = streamweld::utils::from_fn(|| async {
-        static mut COUNTER: i32 = 0;
-        unsafe {
-            COUNTER += 1;
-            if COUNTER <= 5 {
-                Ok(Some(format!("Item-{}", COUNTER)))
-            } else {
-                Ok(None)
-            }
+        use std::sync::atomic::{AtomicI32, Ordering};
+        static COUNTER: AtomicI32 = AtomicI32::new(0);
+
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 5 {
+            Ok(Some(format!("Item-{}", count)))
+        } else {
+            Ok(None)
         }
     });
 

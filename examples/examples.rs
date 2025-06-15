@@ -200,17 +200,17 @@ pub async fn error_handling_example() -> Result<()> {
 
     // Create a source that sometimes fails
     let source = from_fn(|| async {
-        static mut COUNTER: i32 = 0;
-        unsafe {
-            COUNTER += 1;
-            if COUNTER % 3 == 0 {
-                // Simulate occasional errors
-                Err(Error::custom("Simulated error"))
-            } else if COUNTER > 10 {
-                Ok(None) // End production
-            } else {
-                Ok(Some(COUNTER))
-            }
+        use std::sync::atomic::{AtomicI32, Ordering};
+        static COUNTER: AtomicI32 = AtomicI32::new(0);
+
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+        if count % 3 == 0 {
+            // Simulate occasional errors
+            Err(Error::custom("Simulated error"))
+        } else if count > 10 {
+            Ok(None) // End production
+        } else {
+            Ok(Some(count))
         }
     });
 
