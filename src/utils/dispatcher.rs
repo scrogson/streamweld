@@ -12,6 +12,12 @@ use tokio::task::JoinHandle;
 use crate::core::error::Result;
 use crate::core::traits::Sink;
 
+/// Type alias for selector functions used in broadcast dispatchers
+pub type SelectorFn<T> = Arc<dyn Fn(&T) -> bool + Send + Sync>;
+
+/// Type alias for hash functions used in partition dispatchers  
+pub type HashFn<T> = Arc<dyn Fn(&T) -> String + Send + Sync>;
+
 /// Configuration for dispatcher behavior
 pub struct DispatcherConfig {
     /// Buffer size for sink channels
@@ -49,14 +55,14 @@ pub enum DispatcherType<H> {
     /// Broadcast dispatcher (sends to all sinks)
     Broadcast {
         /// Optional selector function for filtering events per sink
-        selector: Option<Arc<dyn Fn(&H) -> bool + Send + Sync>>,
+        selector: Option<SelectorFn<H>>,
     },
     /// Partition dispatcher (routes based on hash function)
     Partition {
         /// Number of partitions or partition names
         partitions: Vec<String>,
         /// Hash function to determine partition
-        hash_fn: Arc<dyn Fn(&H) -> String + Send + Sync>,
+        hash_fn: HashFn<H>,
     },
     /// Custom dispatcher with user-defined logic
     Custom(Arc<dyn CustomDispatcher<H> + Send + Sync>),
@@ -269,7 +275,7 @@ where
         &self,
         events: Vec<T>,
         sinks: &HashMap<SinkId, SinkHandle<T>>,
-        selector: Option<&Arc<dyn Fn(&T) -> bool + Send + Sync>>,
+        selector: Option<&SelectorFn<T>>,
     ) -> Result<()> {
         for event in events {
             for handle in sinks.values() {
@@ -296,7 +302,7 @@ where
         events: Vec<T>,
         sinks: &HashMap<SinkId, SinkHandle<T>>,
         _partitions: &[String],
-        hash_fn: &Arc<dyn Fn(&T) -> String + Send + Sync>,
+        hash_fn: &HashFn<T>,
     ) -> Result<()> {
         // Group sinks by partition
         let mut partition_sinks: HashMap<String, Vec<&SinkHandle<T>>> = HashMap::new();
