@@ -1,52 +1,51 @@
 # StreamWeld
 
-A Rust implementation inspired by Elixir's GenStage, providing demand-driven data processing pipelines with automatic backpressure control.
-
+[![CI](https://github.com/scrogson/streamweld/workflows/CI/badge.svg)](https://github.com/scrogson/streamweld/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/streamweld.svg)](https://crates.io/crates/streamweld)
 [![Documentation](https://docs.rs/streamweld/badge.svg)](https://docs.rs/streamweld)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/scrogson/streamweld)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/scrogson/streamweld/branch/main/graph/badge.svg)](https://codecov.io/gh/scrogson/streamweld)
+
+A GenStage-inspired streaming library for Rust with demand-driven backpressure control and batch-first processing.
 
 ## Features
 
-- **Demand-driven architecture**: Sinks control the flow by pulling data from sources
-- **Automatic backpressure**: Built-in flow control prevents overwhelming slow sinks
-- **Composable pipelines**: Chain sources, processors, and sinks with a fluent API
-- **Async/await support**: Full integration with Rust's async ecosystem
-- **Type safety**: Leverage Rust's type system for compile-time guarantees
-- **Configurable buffering**: Control memory usage and latency with buffer size settings
-- **Error handling**: Structured error propagation with optional fail-fast behavior
-- **Concurrent processing**: Support for parallel execution with configurable concurrency
-- **Rich combinators**: Map, filter, take, chain, and other functional operations
+- **GenStage-inspired Architecture**: Explicit demand signaling for natural backpressure control
+- **Batch-First Processing**: Efficient batch processing with configurable demand sizes
+- **Smart Combinators**: Intelligent demand management in filter, map, and take operations
+- **Async/Await Native**: Built from the ground up for Rust's async ecosystem
+- **Zero-Copy Where Possible**: Minimal allocations and efficient memory usage
+- **Configurable Pipelines**: Tunable batch sizes, concurrency, and timeouts
+- **Comprehensive Error Handling**: Graceful error propagation and recovery
+- **Rich Ecosystem**: Sources, sinks, processors, and combinators for common use cases
 
 ## Quick Start
 
-Add this to your `Cargo.toml`:
+Add StreamWeld to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 streamweld = "0.1"
-tokio = { version = "1.0", features = ["full"] }
 ```
 
-## Basic Usage
+### Basic Usage
 
 ```rust
 use streamweld::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a source that generates numbers 1-10
+    // Create a source that produces numbers 1-10
     let source = RangeSource::new(1..11);
 
-    // Create a processor that doubles each number
+    // Process them (double each number)
     let processor = MapProcessor::new(|x| x * 2);
 
-    // Create a sink that prints each item
+    // Print the results
     let sink = PrintSink::with_prefix("Result".to_string());
 
     // Build and run the pipeline
     Pipeline::new(source, processor)
-        .buffer_size(5)
         .sink(sink)
         .await?;
 
@@ -54,79 +53,29 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Core Concepts
-
-### Source
-
-A `Source` generates items on demand. Sources are pull-based, meaning they only generate items when explicitly requested by downstream sinks.
+### GenStage-Style Demand Processing
 
 ```rust
-use streamweld::traits::Source;
+use streamweld::prelude::*;
 
-struct CounterSource {
-    current: u64,
-    max: u64,
-}
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut source = RangeSource::new(1..21);
 
-#[async_trait::async_trait]
-impl Source for CounterSource {
-    type Item = u64;
+    // Request specific batch sizes
+    println!("Requesting 5 items:");
+    let batch1 = source.handle_demand(5).await?;
+    println!("Got: {:?}", batch1);
 
-    async fn next(&mut self) -> Result<Option<Self::Item>> {
-        if self.current <= self.max {
-            let item = self.current;
-            self.current += 1;
-            Ok(Some(item))
-        } else {
-            Ok(None) // Signal completion
-        }
-    }
+    println!("Requesting 3 more items:");
+    let batch2 = source.handle_demand(3).await?;
+    println!("Got: {:?}", batch2);
+
+    Ok(())
 }
 ```
 
-### Sink
-
-A `Sink` processes items from upstream sources.
-
-```rust
-use streamweld::traits::Sink;
-
-struct LogSink;
-
-#[async_trait::async_trait]
-impl Sink for LogSink {
-    type Item = String;
-
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        println!("Consumed: {}", item);
-        Ok(())
-    }
-}
-```
-
-### Processor
-
-A `Processor` transforms items flowing through the pipeline.
-
-```rust
-use streamweld::traits::Processor;
-
-struct DoubleProcessor;
-
-#[async_trait::async_trait]
-impl Processor for DoubleProcessor {
-    type Input = i32;
-    type Output = i32;
-
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok(vec![item * 2])
-    }
-}
-```
-
-## Advanced Examples
-
-### Complex Pipeline with Multiple Stages
+### Advanced Pipeline Configuration
 
 ```rust
 use streamweld::prelude::*;
@@ -134,126 +83,170 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let source = RangeSource::new(1..101);
+    let source = RangeSource::new(1..1001)
+        .filter(|x| x % 2 == 0)  // Even numbers only
+        .map(|x| x * x)          // Square them
+        .take(50);               // Take first 50
 
-    let pipeline = Pipeline::new(source, FilterProcessor::new(|x: &i64| x % 2 == 0)) // Even numbers only
-        .pipe(MapProcessor::new(|x| x * 3))                // Multiply by 3
-        .pipe(BatchProcessor::new(5))                      // Group into batches of 5
-        .pipe(DelayProcessor::new(Duration::from_millis(100))) // Add delay
-        .buffer_size(20)
-        .timeout(Duration::from_secs(30))
-        .concurrency(4);
-
-    pipeline.sink(PrintSink::with_prefix("Batch".to_string())).await?;
-    Ok(())
-}
-```
-
-### Error Handling
-
-```rust
-use streamweld::prelude::*;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let source = RangeSource::new(1..101);
-
-    let error_handler = ErrorHandlingProcessor::new(
-        MapProcessor::new(|x: i32| {
-            if x % 10 == 0 {
-                panic!("Simulated error!");
-            }
-            format!("Value: {}", x)
-        })
-    );
-
-    let sink = PrintSink::with_prefix("Result".to_string());
-
-    Pipeline::new(source, error_handler)
-        .fail_fast(false) // Continue processing on errors
-        .sink(sink)
-        .await?;
-
-    Ok(())
-}
-```
-
-### Concurrent Processing
-
-```rust
-use streamweld::prelude::*;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let source = RangeSource::new(1..1001);
+    let processor = BatchProcessor::new(10); // Group into batches of 10
     let sink = CollectSink::new();
     let sink_ref = sink.clone();
 
-    let pipeline = Pipeline::new(source, NoOpProcessor::new())
-        .buffer_size(100)
-        .concurrency(8)
-        .timeout(Duration::from_secs(1))
-        .fail_fast(true);
+    Pipeline::new(source, processor)
+        .demand_batch_size(100)                    // Process 100 items at a time
+        .buffer_size(20)                           // Buffer up to 20 batches
+        .max_concurrency(4)                        // Use 4 concurrent workers
+        .operation_timeout(Duration::from_secs(30)) // 30 second timeout
+        .sink(sink)
+        .await?;
 
-    pipeline.sink(sink).await?;
-
-    let items = sink_ref.items();
-    println!("Processed {} items", items.lock().await.len());
+    let results = sink_ref.into_items().await;
+    println!("Processed {} batches", results.len());
 
     Ok(())
 }
 ```
 
-## Built-in Implementations
+## Architecture
+
+StreamWeld is built around three core traits:
+
+- **Source**: Produces items with explicit demand signaling via `handle_demand(usize)`
+- **Processor**: Transforms items with batch-first processing via `process_batch(Vec<Input>)`
+- **Sink**: Consumes items with batch-first writing via `write_batch(Vec<Item>)`
+
+### Demand-Driven Processing
+
+Unlike traditional streaming libraries that use implicit backpressure, StreamWeld uses explicit demand signaling inspired by Elixir's GenStage:
+
+```rust
+// Sources respond to explicit demand requests
+let items = source.handle_demand(batch_size).await?;
+
+// Processors handle batches efficiently
+let results = processor.process_batch(input_batch).await?;
+
+// Sinks write batches with minimal overhead
+sink.write_batch(output_batch).await?;
+```
+
+This approach provides:
+
+- **Natural Backpressure**: Consumers control the flow rate
+- **Efficient Batching**: Reduced async overhead through batch processing
+- **Smart Resource Management**: Memory usage scales with demand, not data size
+- **Predictable Performance**: Configurable batch sizes for different workloads
+
+## Built-in Components
 
 ### Sources
 
-- `RangeSource` - Generates numbers from a range
-- `VecSource` - Yields items from a vector
-- `RepeatSource` - Repeats a value N times or infinitely
-- `IntervalSource` - Generates items at timed intervals
-- `ChunkSource` - Groups items into chunks
-- `MergeSource` - Merges multiple sources round-robin
-- `FibonacciSource` - Generates Fibonacci sequence
-
-### Sinks
-
-- `PrintSink` - Prints items to stdout
-- `CollectSink` - Collects items into a vector
-- `CountSink` - Counts processed items
-- `FileSink` - Writes items to a file
-- `BatchSink` - Batches items before processing
-- `ThroughputSink` - Measures processing throughput
-- `RateLimitedSink` - Applies rate limiting
+- `RangeSource` - Generate sequences of numbers
+- `VecSource` - Iterate over collections
+- `FibonacciSource` - Generate Fibonacci sequences
+- `RepeatSource` - Repeat values
+- `MergeSource` - Combine multiple sources
 
 ### Processors
 
-- `MapProcessor` - Transforms items with a function
-- `FilterProcessor` - Filters items with a predicate
-- `FlatMapProcessor` - Flat maps items to multiple outputs
-- `BatchProcessor` - Groups items into batches
-- `DebatchProcessor` - Ungroups batched items
-- `DelayProcessor` - Adds delays between items
-- `BufferProcessor` - Buffers items by time/count
-- `RateLimitProcessor` - Applies rate limiting
-- `TakeProcessor` - Takes only first N items
-- `SkipProcessor` - Skips first N items
+- `MapProcessor` - Transform items
+- `FilterProcessor` - Filter items by predicate
+- `BatchProcessor` - Group items into batches
+- `RateLimitProcessor` - Control processing rate
+- `ErrorHandlingProcessor` - Handle and recover from errors
+
+### Sinks
+
+- `PrintSink` - Print items to stdout
+- `CollectSink` - Collect items into a vector
+- `CountSink` - Count processed items
+- `ThroughputSink` - Measure processing throughput
+
+### Combinators
+
+Sources support chainable combinators:
+
+```rust
+let source = RangeSource::new(1..1000)
+    .filter(|x| x % 2 == 0)    // Keep even numbers
+    .map(|x| x * 3)            // Multiply by 3
+    .take(100);                // Take first 100
+```
 
 ## Performance
 
-Streamweld is designed for high performance with minimal allocations:
+StreamWeld is designed for high-throughput scenarios:
 
-- Zero-cost abstractions using Rust's trait system
-- Configurable buffering to balance memory usage and latency
-- Support for concurrent processing with work-stealing
-- Efficient backpressure through bounded channels
-- Optional metrics collection for monitoring
+- **Batch Processing**: Processes items in configurable batches (default: 100)
+- **Smart Demand Management**: Combinators request extra items when filtering
+- **Minimal Allocations**: Zero-copy processing where possible
+- **Async Efficiency**: Reduced async overhead through batching
 
-Benchmarks show throughput of over 1M items/second on modern hardware for simple transformations.
+Run benchmarks:
+
+```bash
+cargo bench
+```
+
+## Examples
+
+The repository includes comprehensive examples:
+
+```bash
+# Basic usage patterns
+cargo run --example basic
+
+# Complex pipeline configurations
+cargo run --example complex
+
+# All examples with detailed explanations
+cargo run --example examples
+```
+
+## Testing
+
+Run the full test suite:
+
+```bash
+# Unit and integration tests
+cargo test
+
+# With all features enabled
+cargo test --all-features
+
+# Include doc tests
+cargo test --doc
+```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development Setup
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/scrogson/streamweld.git
+   cd streamweld
+   ```
+
+2. Install Rust (if not already installed):
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+3. Run tests:
+
+   ```bash
+   cargo test --all-features
+   ```
+
+4. Run examples:
+   ```bash
+   cargo run --example basic
+   ```
 
 ## License
 
@@ -266,6 +259,6 @@ at your option.
 
 ## Acknowledgments
 
-- Inspired by [Elixir's GenStage](https://hexdocs.pm/gen_stage/GenStage.html)
-- Built on the excellent [Tokio](https://tokio.rs/) async runtime
+- Inspired by Elixir's [GenStage](https://hexdocs.pm/gen_stage/GenStage.html) library
+- Built on Rust's excellent async ecosystem
 - Thanks to the Rust community for feedback and contributions

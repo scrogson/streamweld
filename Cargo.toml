@@ -51,6 +51,10 @@ path = "examples/complex.rs"
 name = "dispatcher"
 path = "examples/dispatcher.rs"
 
+[[bench]]
+name = "pipeline_benchmarks"
+harness = false
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
