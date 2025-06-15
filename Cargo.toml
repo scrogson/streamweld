@@ -1,0 +1,63 @@
+[package]
+name = "streamweld"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sonny Scroggin <sonny@scrogg.in>"]
+description = "A GenStage-inspired producer/consumer system for Rust with demand-driven backpressure"
+documentation = "https://docs.rs/streamweld"
+homepage = "https://github.com/scrogson/streamweld"
+repository = "https://github.com/scrogson/streamweld"
+license = "MIT OR Apache-2.0"
+keywords = [
+    "async",
+    "stream",
+    "pipeline",
+    "backpressure",
+    "producer",
+    "consumer",
+]
+categories = ["asynchronous", "concurrency"]
+readme = "README.md"
+
+[dependencies]
+tokio = { version = "1.36.0", features = ["full"] }
+tokio-stream = "0.1.14"
+tokio-util = "0.7.10"
+futures = "0.3.30"
+async-trait = "0.1.77"
+thiserror = "1.0"
+
+# Optional dependencies
+tracing = { version = "0.1", optional = true }
+metrics = { version = "0.21", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.0"
+
+[features]
+default = []
+metrics = ["dep:metrics"]
+tracing = ["dep:tracing"]
+serde = ["dep:serde"]
+
+# Feature for enabling all optional features
+full = ["metrics", "tracing", "serde"]
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "complex"
+path = "examples/complex.rs"
+
+[[example]]
+name = "dispatcher"
+path = "examples/dispatcher.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
