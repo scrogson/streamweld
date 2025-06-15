@@ -257,17 +257,19 @@ async fn concurrent_with_error_handling() -> Result<()> {
             return Ok(None);
         }
 
-        // Simulate occasional failures
-        if count % 7 == 0 {
-            return Err(Error::custom(format!("Simulated error at item {}", count)));
-        }
-
+        // Always return Ok, but the data itself can represent success or failure
         Ok(Some(count))
     });
 
-    // Error handling processor
+    // Error handling processor that simulates failures
     let error_handler =
-        ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Processed: {}", x * 2)));
+        ErrorHandlingProcessor::new(streamweld::utils::processor_from_fn(|x: i32| async move {
+            // Simulate occasional failures
+            if x % 7 == 0 {
+                return Err(Error::custom(format!("Simulated error at item {}", x)));
+            }
+            Ok(vec![format!("Processed: {}", x * 2)])
+        }));
 
     // Sink that handles both success and error cases
     let sink = streamweld::utils::into_fn(|result: Result<String>| async move {
