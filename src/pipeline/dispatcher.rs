@@ -39,6 +39,13 @@ where
 impl<T: Send + 'static> Sink for DispatcherSink<T> {
     type Item = T;
 
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for item in items {
+            self.write(item).await?;
+        }
+        Ok(())
+    }
+
     async fn write(&mut self, item: Self::Item) -> Result<()> {
         self.batch.push(item);
 

@@ -8,4 +8,4 @@ pub mod traits;
 
 // Re-export core items
 pub use error::{Error, Result};
-pub use traits::{Processor, Sink, SinkExt, Source, SourceExt};
+pub use traits::{Processor, Sink, Source, SourceExt};

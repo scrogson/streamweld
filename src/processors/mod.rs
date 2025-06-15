@@ -1,64 +1,100 @@
 //! Processor implementations for the streamweld library.
 //!
 //! This module provides concrete implementations of processors that transform data
-//! flowing through processing pipelines.
+//! flowing through processing pipelines using batch-first design for efficiency.
 
 pub mod combinators;
 
 use async_trait::async_trait;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::core::{Processor, Result};
 
-/// A processor that maps events using a function.
-///
-/// This processor applies a function to each event.
-pub struct MapProcessor<F, T, U> {
-    f: F,
-    _phantom: std::marker::PhantomData<(T, U)>,
+/// A no-op processor that passes items through unchanged
+pub struct NoOpProcessor<T> {
+    _phantom: PhantomData<T>,
 }
 
-impl<F, T, U> MapProcessor<F, T, U> {
-    /// Create a new map processor
-    pub fn new(f: F) -> Self {
+impl<T> NoOpProcessor<T> {
+    /// Create a new no-op processor
+    pub fn new() -> Self {
         Self {
-            f,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<F, T, U> Processor for MapProcessor<F, T, U>
-where
-    F: FnMut(T) -> U + Send + Sync + 'static,
-    T: Send + 'static,
-    U: Send + 'static,
-{
+impl<T: Send + 'static> Processor for NoOpProcessor<T> {
     type Input = T;
-    type Output = U;
+    type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok(vec![(self.f)(item)])
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        Ok(items) // Pass through unchanged
     }
 }
 
-/// A processor that filters events using a predicate.
-///
-/// This processor only passes events that satisfy the predicate.
-pub struct FilterProcessor<F, T> {
-    predicate: F,
-    _phantom: std::marker::PhantomData<T>,
+impl<T> Default for NoOpProcessor<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl<F, T> FilterProcessor<F, T> {
+/// A processor that maps items through a function
+pub struct MapProcessor<F, I, O> {
+    f: F,
+    _phantom: PhantomData<(I, O)>,
+}
+
+impl<F, I, O> MapProcessor<F, I, O>
+where
+    F: FnMut(I) -> O + Send,
+    I: Send + 'static,
+    O: Send + 'static,
+{
+    /// Create a new map processor
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<F, I, O> Processor for MapProcessor<F, I, O>
+where
+    F: FnMut(I) -> O + Send,
+    I: Send + 'static,
+    O: Send + 'static,
+{
+    type Input = I;
+    type Output = O;
+
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        Ok(items.into_iter().map(&mut self.f).collect())
+    }
+}
+
+/// A processor that filters items based on a predicate
+pub struct FilterProcessor<F, T> {
+    predicate: F,
+    _phantom: PhantomData<T>,
+}
+
+impl<F, T> FilterProcessor<F, T>
+where
+    F: FnMut(&T) -> bool + Send,
+    T: Send + 'static,
+{
     /// Create a new filter processor
     pub fn new(predicate: F) -> Self {
         Self {
             predicate,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -66,24 +102,18 @@ impl<F, T> FilterProcessor<F, T> {
 #[async_trait]
 impl<F, T> Processor for FilterProcessor<F, T>
 where
-    F: FnMut(&T) -> bool + Send + Sync + 'static,
+    F: FnMut(&T) -> bool + Send,
     T: Send + 'static,
 {
     type Input = T;
     type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        if (self.predicate)(&item) {
-            Ok(vec![item])
-        } else {
-            Ok(vec![])
-        }
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        Ok(items.into_iter().filter(&mut self.predicate).collect())
     }
 }
 
-/// A processor that batches events.
-///
-/// This processor collects events into batches.
+/// A processor that collects items into batches
 pub struct BatchProcessor<T> {
     batch_size: usize,
     batch: Vec<T>,
@@ -104,15 +134,19 @@ impl<T: Send + 'static> Processor for BatchProcessor<T> {
     type Input = T;
     type Output = Vec<T>;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        self.batch.push(item);
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
 
-        if self.batch.len() >= self.batch_size {
-            let batch = std::mem::take(&mut self.batch);
-            Ok(vec![batch])
-        } else {
-            Ok(vec![])
+        // Add new items to current batch
+        self.batch.extend(items);
+
+        // Emit completed batches
+        while self.batch.len() >= self.batch_size {
+            let batch: Vec<T> = self.batch.drain(..self.batch_size).collect();
+            results.push(batch);
         }
+
+        Ok(results)
     }
 
     async fn finish(&mut self) -> Result<Vec<Self::Output>> {
@@ -125,7 +159,7 @@ impl<T: Send + 'static> Processor for BatchProcessor<T> {
     }
 }
 
-/// A processor that debatches items
+/// A processor that debatches items (flattens batches)
 pub struct DebatchProcessor<T> {
     _phantom: std::marker::PhantomData<T>,
 }
@@ -144,8 +178,8 @@ impl<T: Send + 'static> Processor for DebatchProcessor<T> {
     type Input = Vec<T>;
     type Output = T;
 
-    async fn process(&mut self, items: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok(items)
+    async fn process_batch(&mut self, batches: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        Ok(batches.into_iter().flatten().collect())
     }
 }
 
@@ -176,35 +210,15 @@ impl<T: Send + 'static> Processor for DelayProcessor<T> {
     type Input = T;
     type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        sleep(self.delay).await;
-        Ok(vec![item])
-    }
-}
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::with_capacity(items.len());
 
-/// A processor that duplicates items
-pub struct DuplicateProcessor<T> {
-    count: usize,
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T> DuplicateProcessor<T> {
-    /// Create a new duplicate processor
-    pub fn new(count: usize) -> Self {
-        Self {
-            count,
-            _phantom: std::marker::PhantomData,
+        for item in items {
+            sleep(self.delay).await;
+            results.push(item);
         }
-    }
-}
 
-#[async_trait]
-impl<T: Clone + Send + 'static> Processor for DuplicateProcessor<T> {
-    type Input = T;
-    type Output = T;
-
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok(vec![item; self.count])
+        Ok(results)
     }
 }
 
@@ -229,13 +243,11 @@ impl<T: Send + 'static> Processor for TakeProcessor<T> {
     type Input = T;
     type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        if self.remaining > 0 {
-            self.remaining -= 1;
-            Ok(vec![item])
-        } else {
-            Ok(vec![])
-        }
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let to_take = items.len().min(self.remaining);
+        self.remaining = self.remaining.saturating_sub(to_take);
+
+        Ok(items.into_iter().take(to_take).collect())
     }
 }
 
@@ -260,55 +272,50 @@ impl<T: Send + 'static> Processor for SkipProcessor<T> {
     type Input = T;
     type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        if self.remaining > 0 {
-            self.remaining -= 1;
-            Ok(vec![])
-        } else {
-            Ok(vec![item])
-        }
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let to_skip = items.len().min(self.remaining);
+        self.remaining = self.remaining.saturating_sub(to_skip);
+
+        Ok(items.into_iter().skip(to_skip).collect())
     }
 }
 
-/// A processor that buffers items and releases them based on time or count
+/// A processor that buffers items with size and time constraints
 pub struct BufferProcessor<T> {
-    buffer: VecDeque<T>,
     max_size: usize,
-    max_age: Duration,
+    max_duration: Duration,
+    buffer: VecDeque<T>,
     buffer_start: Option<Instant>,
 }
 
 impl<T> BufferProcessor<T> {
     /// Create a new buffer processor
-    pub fn new(max_size: usize, max_age: Duration) -> Self {
+    pub fn new(max_size: usize, max_duration: Duration) -> Self {
         Self {
-            buffer: VecDeque::new(),
             max_size,
-            max_age,
+            max_duration,
+            buffer: VecDeque::new(),
             buffer_start: None,
         }
     }
 
-    /// Check if the buffer should be flushed
+    /// Check if buffer should be flushed
     fn should_flush(&self) -> bool {
         if self.buffer.len() >= self.max_size {
             return true;
         }
 
         if let Some(start) = self.buffer_start {
-            if start.elapsed() >= self.max_age {
-                return true;
-            }
+            start.elapsed() >= self.max_duration
+        } else {
+            false
         }
-
-        false
     }
 
-    /// Flush the buffer
+    /// Flush the current buffer
     fn flush(&mut self) -> Vec<T> {
-        let items = self.buffer.drain(..).collect();
         self.buffer_start = None;
-        items
+        self.buffer.drain(..).collect()
     }
 }
 
@@ -317,27 +324,31 @@ impl<T: Send + 'static> Processor for BufferProcessor<T> {
     type Input = T;
     type Output = Vec<T>;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        if self.buffer.is_empty() {
-            self.buffer_start = Some(Instant::now());
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            if self.buffer.is_empty() {
+                self.buffer_start = Some(Instant::now());
+            }
+
+            self.buffer.push_back(item);
+
+            if self.should_flush() {
+                let batch = self.flush();
+                results.push(batch);
+            }
         }
 
-        self.buffer.push_back(item);
-
-        if self.should_flush() {
-            let items = self.flush();
-            Ok(vec![items])
-        } else {
-            Ok(vec![])
-        }
+        Ok(results)
     }
 
     async fn finish(&mut self) -> Result<Vec<Self::Output>> {
         if self.buffer.is_empty() {
             Ok(vec![])
         } else {
-            let items = self.flush();
-            Ok(vec![items])
+            let batch = self.flush();
+            Ok(vec![batch])
         }
     }
 }
@@ -368,18 +379,24 @@ impl<T: Send + 'static> Processor for RateLimitProcessor<T> {
     type Input = T;
     type Output = T;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        let now = Instant::now();
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::with_capacity(items.len());
 
-        if let Some(last) = self.last_processed {
-            let elapsed = now.duration_since(last);
-            if elapsed < self.min_interval {
-                sleep(self.min_interval - elapsed).await;
+        for item in items {
+            let now = Instant::now();
+
+            if let Some(last) = self.last_processed {
+                let elapsed = now.duration_since(last);
+                if elapsed < self.min_interval {
+                    sleep(self.min_interval - elapsed).await;
+                }
             }
+
+            self.last_processed = Some(Instant::now());
+            results.push(item);
         }
 
-        self.last_processed = Some(Instant::now());
-        Ok(vec![item])
+        Ok(results)
     }
 }
 
@@ -404,45 +421,26 @@ where
     type Input = P::Input;
     type Output = Result<P::Output>;
 
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        match self.inner.process(item).await {
-            Ok(outputs) => Ok(outputs.into_iter().map(Ok).collect()),
-            Err(e) => Ok(vec![Err(e)]),
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            match self.inner.process(item).await {
+                Ok(outputs) => {
+                    // process() returns Vec<Output>, so we need to handle each output
+                    for output in outputs {
+                        results.push(Ok(output));
+                    }
+                }
+                Err(e) => results.push(Err(e)),
+            }
         }
+
+        Ok(results)
     }
 
     async fn finish(&mut self) -> Result<Vec<Self::Output>> {
         let outputs = self.inner.finish().await?;
         Ok(outputs.into_iter().map(Ok).collect())
-    }
-}
-
-/// A processor that passes through items unchanged
-pub struct NoOpProcessor<T> {
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T> NoOpProcessor<T> {
-    /// Create a new no-op processor
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-#[async_trait]
-impl<T: Send + 'static> Processor for NoOpProcessor<T> {
-    type Input = T;
-    type Output = T;
-
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-        Ok(vec![item])
-    }
-}
-
-impl<T> Default for NoOpProcessor<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }

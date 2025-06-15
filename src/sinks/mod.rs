@@ -1,7 +1,7 @@
 //! Sink implementations for the streamweld library.
 //!
 //! This module provides concrete implementations of sinks that consume data
-//! from processing pipelines.
+//! from processing pipelines using batch-first design for efficiency.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -15,11 +15,11 @@ use tokio::time::sleep;
 
 use crate::core::{Result, Sink};
 
-/// A sink that prints events to stdout.
+/// A sink that prints items to stdout.
 ///
-/// This sink prints events to stdout.
+/// This sink prints items to stdout.
 pub struct PrintSink<T> {
-    /// The prefix to print before each event
+    /// The prefix to print before each item
     prefix: Option<String>,
     _phantom: PhantomData<T>,
 }
@@ -46,15 +46,13 @@ impl<T> PrintSink<T> {
 impl<T: Send + 'static + Display> Sink for PrintSink<T> {
     type Item = T;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        match &self.prefix {
-            Some(prefix) => println!("{}: {}", prefix, item),
-            None => println!("{}", item),
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for item in items {
+            match &self.prefix {
+                Some(prefix) => println!("{}: {}", prefix, item),
+                None => println!("{}", item),
+            }
         }
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -65,11 +63,11 @@ impl<T> Default for PrintSink<T> {
     }
 }
 
-/// A sink that collects events into a vector.
+/// A sink that collects items into a vector.
 ///
-/// This sink collects events into a vector.
+/// This sink collects items into a vector.
 pub struct CollectSink<T> {
-    /// The vector to collect events into
+    /// The vector to collect items into
     items: Arc<TokioMutex<Vec<T>>>,
 }
 
@@ -81,7 +79,7 @@ impl<T: Send + 'static + Clone> CollectSink<T> {
         }
     }
 
-    /// Get the collected events
+    /// Get the collected items
     pub async fn into_items(self) -> Vec<T> {
         self.items.lock().await.clone()
     }
@@ -96,13 +94,9 @@ impl<T: Send + 'static + Clone> CollectSink<T> {
 impl<T: Send + 'static + Clone> Sink for CollectSink<T> {
     type Item = T;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        let mut items = self.items.lock().await;
-        items.push(item);
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<()> {
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        let mut collected = self.items.lock().await;
+        collected.extend(items);
         Ok(())
     }
 }
@@ -121,7 +115,7 @@ impl<T> Clone for CollectSink<T> {
     }
 }
 
-/// A sink that counts events
+/// A sink that counts items
 pub struct CountSink<T> {
     count: Arc<TokioMutex<usize>>,
     _phantom: PhantomData<T>,
@@ -151,13 +145,9 @@ impl<T> CountSink<T> {
 impl<T: Send + 'static> Sink for CountSink<T> {
     type Item = T;
 
-    async fn write(&mut self, _item: Self::Item) -> Result<()> {
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
         let mut count = self.count.lock().await;
-        *count += 1;
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<()> {
+        *count += items.len();
         Ok(())
     }
 }
@@ -177,7 +167,7 @@ impl<T> Clone for CountSink<T> {
     }
 }
 
-/// A sink that writes events to a file
+/// A sink that writes items to a file
 pub struct FileSink<T> {
     writer: tokio::io::BufWriter<tokio::fs::File>,
     _phantom: PhantomData<T>,
@@ -211,20 +201,24 @@ impl<T> FileSink<T> {
 impl<T: Send + 'static + Display> Sink for FileSink<T> {
     type Item = T;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for item in items {
+            self.writer
+                .write_all(format!("{}\n", item).as_bytes())
+                .await
+                .map_err(|e| {
+                    crate::core::error::Error::custom(format!("File write error: {}", e))
+                })?;
+        }
         self.writer
-            .write_all(format!("{}\n", item).as_bytes())
+            .flush()
             .await
-            .map_err(|e| crate::core::error::Error::custom(format!("File write error: {}", e)))?;
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<()> {
+            .map_err(|e| crate::core::error::Error::custom(format!("File flush error: {}", e)))?;
         Ok(())
     }
 }
 
-/// A sink that batches events and processes them together
+/// A sink that batches items and processes them together
 pub struct BatchSink<C, T> {
     inner: C,
     batch_size: usize,
@@ -249,7 +243,7 @@ where
     async fn process_batch(&mut self) -> Result<()> {
         if !self.batch.is_empty() {
             let batch = std::mem::take(&mut self.batch);
-            self.inner.write(batch).await?;
+            self.inner.write_batch(vec![batch]).await?;
         }
         Ok(())
     }
@@ -263,18 +257,19 @@ where
 {
     type Item = T;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        self.batch.push(item);
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for item in items {
+            self.batch.push(item);
 
-        if self.batch.len() >= self.batch_size {
-            self.process_batch().await?;
+            if self.batch.len() >= self.batch_size {
+                self.process_batch().await?;
+            }
         }
-
         Ok(())
     }
 
     async fn finish(&mut self) -> Result<()> {
-        // Process any remaining events in the batch
+        // Process any remaining items in the batch
         self.process_batch().await?;
         self.inner.finish().await?;
         Ok(())
@@ -314,7 +309,7 @@ impl<C> ThroughputSink<C> {
                 // TODO: use this
                 let _interval_elapsed = now.duration_since(last_report);
                 println!(
-                    "Throughput: {:.2} events/sec (total: {} events in {:.2}s)",
+                    "Throughput: {:.2} items/sec (total: {} items in {:.2}s)",
                     total_rate,
                     self.count,
                     total_elapsed.as_secs_f64()
@@ -330,7 +325,7 @@ impl<C> ThroughputSink<C> {
 impl<C: Sink + Send> Sink for ThroughputSink<C> {
     type Item = C::Item;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
         let now = Instant::now();
 
         if self.start_time.is_none() {
@@ -338,8 +333,9 @@ impl<C: Sink + Send> Sink for ThroughputSink<C> {
             self.last_report = Some(now);
         }
 
-        self.inner.write(item).await?;
-        self.count += 1;
+        let batch_size = items.len();
+        self.inner.write_batch(items).await?;
+        self.count += batch_size;
 
         if let Some(last_report) = self.last_report {
             if now.duration_since(last_report) >= self.report_interval {
@@ -379,18 +375,21 @@ impl<C> RateLimitedSink<C> {
 impl<C: Sink + Send> Sink for RateLimitedSink<C> {
     type Item = C::Item;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        let now = Instant::now();
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        // Apply rate limiting per item in batch
+        for item in items {
+            let now = Instant::now();
 
-        if let Some(last) = self.last_consumed {
-            let elapsed = now.duration_since(last);
-            if elapsed < self.min_interval {
-                sleep(self.min_interval - elapsed).await;
+            if let Some(last) = self.last_consumed {
+                let elapsed = now.duration_since(last);
+                if elapsed < self.min_interval {
+                    sleep(self.min_interval - elapsed).await;
+                }
             }
-        }
 
-        self.inner.write(item).await?;
-        self.last_consumed = Some(Instant::now());
+            self.inner.write(item).await?;
+            self.last_consumed = Some(Instant::now());
+        }
         Ok(())
     }
 
@@ -399,7 +398,7 @@ impl<C: Sink + Send> Sink for RateLimitedSink<C> {
     }
 }
 
-/// A sink that aggregates events by key
+/// A sink that aggregates items by key
 pub struct AggregateSink<K, V, F, T> {
     map: Arc<TokioMutex<HashMap<K, V>>>,
     key_fn: F,
@@ -445,16 +444,14 @@ where
 {
     type Item = T;
 
-    async fn write(&mut self, item: Self::Item) -> Result<()> {
-        let (key, value) = (self.key_fn)(&item);
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
         let mut map = self.map.lock().await;
-        map.entry(key)
-            .and_modify(|v| *v = value.clone())
-            .or_insert(value);
-        Ok(())
-    }
-
-    async fn finish(&mut self) -> Result<()> {
+        for item in items {
+            let (key, value) = (self.key_fn)(&item);
+            map.entry(key)
+                .and_modify(|v| *v = value.clone())
+                .or_insert(value);
+        }
         Ok(())
     }
 }

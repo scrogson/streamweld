@@ -3,6 +3,7 @@
 use std::time::Duration;
 use streamweld::core::SourceExt;
 use streamweld::prelude::*;
+use streamweld::sources::MergeSource;
 
 #[tokio::test]
 async fn test_basic_pipeline() -> Result<()> {
@@ -270,21 +271,24 @@ async fn test_vec_source() {
 }
 
 #[tokio::test]
-async fn test_chain_source() {
+async fn test_merge_source() {
     let source1 = RangeSource::new(1..4);
     let source2 = RangeSource::new(4..7);
-    let chained = source1.chain(source2);
+    let merged = MergeSource::new().add_source(source1).add_source(source2);
     let collector = CollectSink::new();
     let collector_ref = collector.clone();
 
-    Pipeline::new(chained, NoOpProcessor::<i64>::new())
+    Pipeline::new(merged, NoOpProcessor::<i64>::new())
         .sink(collector)
         .await
         .unwrap();
 
     let items = collector_ref.items();
     let collected = items.lock().await;
-    assert_eq!(*collected, vec![1, 2, 3, 4, 5, 6]);
+    // MergeSource interleaves items, so we need to sort for comparison
+    let mut sorted_items = collected.clone();
+    sorted_items.sort();
+    assert_eq!(sorted_items, vec![1, 2, 3, 4, 5, 6]);
 }
 
 #[tokio::test]

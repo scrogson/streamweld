@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 use streamweld::prelude::*;
-use streamweld::utils::sink_from_fn;
+use streamweld::sources::MergeSource;
+use streamweld::utils::into_fn;
 use streamweld::utils::{from_fn, processor_from_fn};
 use streamweld::Result;
 use tokio::time::sleep;
@@ -58,6 +59,27 @@ impl streamweld::core::Processor for MultiStageProcessor {
     type Input = i64;
     type Output = Vec<i64>;
 
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            // Filter even numbers
+            if item % 2 != 0 {
+                continue;
+            }
+            // Double the value
+            let doubled = item * 2;
+            self.batch.push(doubled);
+
+            if self.batch.len() >= self.batch_size {
+                let batch = std::mem::take(&mut self.batch);
+                results.push(batch);
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         // Filter even numbers
         if item % 2 != 0 {
@@ -90,6 +112,13 @@ struct DebugPrintSink;
 #[async_trait::async_trait]
 impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
+
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for batch in items {
+            println!("Batch: {:?}", batch);
+        }
+        Ok(())
+    }
 
     async fn write(&mut self, item: Self::Item) -> Result<()> {
         println!("Batch: {:?}", item);
@@ -189,7 +218,7 @@ pub async fn error_handling_example() -> Result<()> {
     let error_handler =
         ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Value: {}", x)));
 
-    let sink = sink_from_fn(|result: Result<String>| async move {
+    let sink = into_fn(|result: Result<String>| async move {
         match result {
             Ok(value) => println!("✓ {}", value),
             Err(e) => println!("✗ Error: {}", e),
@@ -314,10 +343,13 @@ pub async fn chaining_example() -> Result<()> {
     let source2 = RangeSource::new(10..13);
     let source3 = RangeSource::new(20..23);
 
-    let chained = source1.chain(source2).chain(source3);
+    let merged = MergeSource::new()
+        .add_source(source1)
+        .add_source(source2)
+        .add_source(source3);
 
-    Pipeline::new(chained, NoOpProcessor::<i64>::new())
-        .sink(PrintSink::<i64>::with_prefix("Chained".to_string()))
+    Pipeline::new(merged, NoOpProcessor::<i64>::new())
+        .sink(PrintSink::<i64>::with_prefix("Merged".to_string()))
         .await?;
 
     println!();

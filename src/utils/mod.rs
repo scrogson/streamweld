@@ -4,6 +4,7 @@ pub mod dispatcher;
 
 use async_trait::async_trait;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
@@ -22,21 +23,23 @@ where
     Fut: Future<Output = Result<Option<T>>> + Send,
     T: Send + 'static,
 {
-    FnSource {
-        f,
-        _phantom: std::marker::PhantomData,
-    }
+    FnSource::new(f)
 }
 
 /// A source created from a function
-pub struct FnSource<F, Fut, T>
-where
-    F: FnMut() -> Fut + Send,
-    Fut: Future<Output = Result<Option<T>>> + Send,
-    T: Send + 'static,
-{
-    pub f: F,
-    _phantom: std::marker::PhantomData<(Fut, T)>,
+pub struct FnSource<F, Fut, T> {
+    f: F,
+    _phantom: PhantomData<(Fut, T)>,
+}
+
+impl<F, Fut, T> FnSource<F, Fut, T> {
+    /// Create a new function source
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 #[async_trait]
@@ -47,6 +50,19 @@ where
     T: Send + 'static,
 {
     type Item = T;
+
+    async fn handle_demand(&mut self, demand: usize) -> Result<Vec<Self::Item>> {
+        let mut items = Vec::with_capacity(demand);
+
+        for _ in 0..demand {
+            match (self.f)().await? {
+                Some(item) => items.push(item),
+                None => break, // Source exhausted
+            }
+        }
+
+        Ok(items)
+    }
 
     async fn next(&mut self) -> Result<Option<Self::Item>> {
         (self.f)().await
@@ -60,21 +76,33 @@ where
     Fut: Future<Output = Result<()>> + Send,
     T: Send + 'static,
 {
-    FnSink {
-        f,
-        _phantom: std::marker::PhantomData,
-    }
+    FnSink::new(f)
 }
 
 /// A sink created from a function
-pub struct FnSink<F, Fut, T>
+pub struct FnSink<F, Fut, T> {
+    f: F,
+    _phantom: PhantomData<(Fut, T)>,
+}
+
+impl<F, Fut, T> FnSink<F, Fut, T> {
+    /// Create a new function sink
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// Create a sink from a function
+pub fn into_fn<F, Fut, T>(f: F) -> FnSink<F, Fut, T>
 where
     F: FnMut(T) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
     T: Send + 'static,
 {
-    pub f: F,
-    _phantom: std::marker::PhantomData<(Fut, T)>,
+    FnSink::new(f)
 }
 
 #[async_trait]
@@ -85,6 +113,13 @@ where
     T: Send + 'static,
 {
     type Item = T;
+
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+        for item in items {
+            (self.f)(item).await?;
+        }
+        Ok(())
+    }
 
     async fn write(&mut self, item: Self::Item) -> Result<()> {
         (self.f)(item).await
@@ -99,22 +134,34 @@ where
     T: Send + 'static,
     U: Send + 'static,
 {
-    FnProcessor {
-        f,
-        _phantom: std::marker::PhantomData,
-    }
+    FnProcessor::new(f)
 }
 
 /// A processor created from a function
-pub struct FnProcessor<F, Fut, T, U>
+pub struct FnProcessor<F, Fut, T, U> {
+    f: F,
+    _phantom: PhantomData<(Fut, T, U)>,
+}
+
+impl<F, Fut, T, U> FnProcessor<F, Fut, T, U> {
+    /// Create a new function processor
+    pub fn new(f: F) -> Self {
+        Self {
+            f,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// Create a processor from a function
+pub fn process_fn<F, Fut, T, U>(f: F) -> FnProcessor<F, Fut, T, U>
 where
     F: FnMut(T) -> Fut + Send,
     Fut: Future<Output = Result<Vec<U>>> + Send,
     T: Send + 'static,
     U: Send + 'static,
 {
-    pub f: F,
-    _phantom: std::marker::PhantomData<(Fut, T, U)>,
+    FnProcessor::new(f)
 }
 
 #[async_trait]
@@ -127,6 +174,17 @@ where
 {
     type Input = T;
     type Output = U;
+
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut outputs = Vec::new();
+
+        for item in items {
+            let item_outputs = (self.f)(item).await?;
+            outputs.extend(item_outputs);
+        }
+
+        Ok(outputs)
+    }
 
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         (self.f)(item).await

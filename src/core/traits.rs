@@ -2,14 +2,17 @@
 //!
 //! This module defines the fundamental abstractions that enable demand-driven
 //! data processing pipelines with automatic backpressure control.
+//!
+//! This system is inspired by Elixir's GenStage, using explicit demand signaling
+//! for efficient batch processing with natural backpressure.
 
 use crate::core::error::Result;
 use async_trait::async_trait;
 
-/// A source generates items on demand.
+/// A source generates items on demand using GenStage-style demand signaling.
 ///
-/// Sources are pull-based - they only generate items when explicitly
-/// requested by downstream sinks, enabling natural backpressure control.
+/// Sources respond to explicit demand requests from downstream sinks,
+/// enabling efficient batch processing and natural backpressure control.
 ///
 /// # Examples
 ///
@@ -26,14 +29,19 @@ use async_trait::async_trait;
 /// impl Source for CounterSource {
 ///     type Item = u64;
 ///
-///     async fn next(&mut self) -> Result<Option<Self::Item>> {
-///         if self.current <= self.max {
-///             let item = self.current;
-///             self.current += 1;
-///             Ok(Some(item))
-///         } else {
-///             Ok(None) // Signal completion
+///     async fn handle_demand(&mut self, demand: usize) -> Result<Vec<Self::Item>> {
+///         let mut items = Vec::with_capacity(demand);
+///         
+///         for _ in 0..demand {
+///             if self.current <= self.max {
+///                 items.push(self.current);
+///                 self.current += 1;
+///             } else {
+///                 break; // Source exhausted
+///             }
 ///         }
+///         
+///         Ok(items)
 ///     }
 /// }
 /// ```
@@ -42,17 +50,27 @@ pub trait Source {
     /// The type of items this source generates
     type Item: Send + 'static;
 
-    /// Get the next item, or None if the source is exhausted.
+    /// Handle demand for multiple items (GenStage-style).
     ///
-    /// This method should be cheap to call repeatedly and should handle
-    /// backpressure by only generating when called.
-    async fn next(&mut self) -> Result<Option<Self::Item>>;
+    /// This is the primary method that responds to explicit demand signals.
+    /// Sources should return up to `demand` items, or fewer if exhausted.
+    /// An empty Vec indicates the source is completely exhausted.
+    async fn handle_demand(&mut self, demand: usize) -> Result<Vec<Self::Item>>;
+
+    /// Get the next single item (convenience method).
+    ///
+    /// This is a convenience wrapper around handle_demand for single-item use cases.
+    /// Most efficient usage should prefer handle_demand with larger batch sizes.
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
+        let items = self.handle_demand(1).await?;
+        Ok(items.into_iter().next())
+    }
 }
 
-/// A sink processes items from upstream.
+/// A sink processes items from upstream with batch-first design.
 ///
-/// Sinks represent the demand side of the pipeline - they pull items
-/// from sources and process them.
+/// Sinks represent the demand side of the pipeline - they process items
+/// in batches for efficiency, with single-item writes as a convenience.
 ///
 /// # Examples
 ///
@@ -66,8 +84,10 @@ pub trait Source {
 /// impl Sink for LogSink {
 ///     type Item = String;
 ///
-///     async fn write(&mut self, item: Self::Item) -> Result<()> {
-///         println!("Logged: {}", item);
+///     async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()> {
+///         for item in items {
+///             println!("Logged: {}", item);
+///         }
 ///         Ok(())
 ///     }
 /// }
@@ -77,11 +97,19 @@ pub trait Sink {
     /// The type of items this sink accepts
     type Item: Send + 'static;
 
-    /// Write a single item.
+    /// Write a batch of items (primary method).
     ///
-    /// This method should handle the item completely - if it returns Ok(()),
-    /// the item is considered successfully processed.
-    async fn write(&mut self, item: Self::Item) -> Result<()>;
+    /// This is the primary method for efficient batch processing.
+    /// Sinks should process all items in the batch together when possible.
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> Result<()>;
+
+    /// Write a single item (convenience method).
+    ///
+    /// This is a convenience wrapper around write_batch for single-item use cases.
+    /// Most efficient usage should prefer write_batch with larger batches.
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
+        self.write_batch(vec![item]).await
+    }
 
     /// Called when the upstream source is exhausted.
     ///
@@ -91,10 +119,10 @@ pub trait Sink {
     }
 }
 
-/// A processor transforms items (sink + source combined).
+/// A processor transforms items (sink + source combined) with batch processing.
 ///
-/// This is equivalent to GenStage's source_sink - it consumes items
-/// from upstream, transforms them, and produces new items for downstream.
+/// This is equivalent to GenStage's source_sink - it handles demand
+/// from downstream, processes items in batches, and produces new items.
 ///
 /// # Examples
 ///
@@ -109,8 +137,8 @@ pub trait Sink {
 ///     type Input = i32;
 ///     type Output = i32;
 ///
-///     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
-///         Ok(vec![item * 2])  // Transform input to output
+///     async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+///         Ok(items.into_iter().map(|x| x * 2).collect())
 ///     }
 /// }
 /// ```
@@ -121,11 +149,20 @@ pub trait Processor {
     /// The type of items this processor produces
     type Output: Send + 'static;
 
-    /// Process an input item and produce zero or more output items.
+    /// Process a batch of input items and produce output items (primary method).
     ///
-    /// Returning an empty Vec means the item was consumed but produced no output.
-    /// This enables filtering and batching behaviors.
-    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>>;
+    /// This is the primary method for efficient batch processing.
+    /// Returns a Vec of all output items from processing the input batch.
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>>;
+
+    /// Process a single input item (convenience method).
+    ///
+    /// This is a convenience wrapper for single-item processing.
+    /// Default implementation calls process_batch with a single item.
+    async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
+        let outputs = self.process_batch(vec![item]).await?;
+        Ok(outputs)
+    }
 
     /// Called when upstream is exhausted, allowing final output generation.
     async fn finish(&mut self) -> Result<Vec<Self::Output>> {
@@ -133,117 +170,37 @@ pub trait Processor {
     }
 }
 
-/// Extension trait for composing sources with processors and sinks.
-pub trait SourceExt: Source + Sized {
+/// Extension trait for sources that provides combinator methods
+pub trait SourceExt: Source {
     /// Map items through a function
-    fn map<F, U>(self, f: F) -> Map<Self, F>
+    fn map<F, U>(self, f: F) -> crate::processors::combinators::MapSource<Self, F>
     where
-        F: FnMut(Self::Item) -> U + Send,
-        U: Send + 'static;
-
-    /// Filter items with a predicate
-    fn filter<F>(self, predicate: F) -> Filter<Self, F>
-    where
-        F: FnMut(&Self::Item) -> bool + Send;
-
-    /// Take only the first n items
-    fn take(self, n: usize) -> Take<Self>;
-
-    /// Chain with another source
-    fn chain<P2>(self, other: P2) -> Chain<Self, P2>
-    where
-        P2: Source<Item = Self::Item>;
-}
-
-/// Extension trait for sinks
-pub trait SinkExt: Sink + Sized {
-    /// Create a sink that applies a function to each item before consuming
-    fn contramap<F, T>(self, f: F) -> Contramap<Self, F, T>
-    where
-        F: FnMut(T) -> Self::Item + Send,
-        T: Send + 'static;
-}
-
-// Combinator implementations would go here
-// For brevity, I'll define the types but implement them in the impls module
-
-pub struct Map<P, F> {
-    pub source: P,
-    pub f: F,
-}
-
-pub struct Filter<P, F> {
-    pub source: P,
-    pub predicate: F,
-}
-
-pub struct Take<P> {
-    pub source: P,
-    pub remaining: usize,
-}
-
-pub struct Chain<P1, P2> {
-    pub first: Option<P1>,
-    pub second: P2,
-}
-
-pub struct Contramap<C, F, T> {
-    pub sink: C,
-    pub f: F,
-    pub _phantom: std::marker::PhantomData<T>,
-}
-
-// Auto-implement SourceExt for all Sources
-impl<P: Source> SourceExt for P {
-    fn map<F, U>(self, f: F) -> Map<Self, F>
-    where
+        Self: Sized,
         F: FnMut(Self::Item) -> U + Send,
         U: Send + 'static,
     {
-        Map { source: self, f }
+        crate::processors::combinators::MapSource::new(self, f)
     }
 
-    fn filter<F>(self, predicate: F) -> Filter<Self, F>
+    /// Filter items based on a predicate
+    fn filter<F>(self, predicate: F) -> crate::processors::combinators::FilterSource<Self, F>
     where
+        Self: Sized,
         F: FnMut(&Self::Item) -> bool + Send,
     {
-        Filter {
-            source: self,
-            predicate,
-        }
+        crate::processors::combinators::FilterSource::new(self, predicate)
     }
 
-    fn take(self, n: usize) -> Take<Self> {
-        Take {
-            source: self,
-            remaining: n,
-        }
-    }
-
-    fn chain<P2>(self, other: P2) -> Chain<Self, P2>
+    /// Take only the first N items
+    fn take(self, count: usize) -> crate::processors::combinators::TakeSource<Self>
     where
-        P2: Source<Item = Self::Item>,
+        Self: Sized,
     {
-        Chain {
-            first: Some(self),
-            second: other,
-        }
+        crate::processors::combinators::TakeSource::new(self, count)
     }
 }
 
-impl<C: Sink> SinkExt for C {
-    fn contramap<F, T>(self, f: F) -> Contramap<Self, F, T>
-    where
-        F: FnMut(T) -> Self::Item + Send,
-        T: Send + 'static,
-    {
-        Contramap {
-            sink: self,
-            f,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
+impl<P: Source> SourceExt for P {}
 
 /// A source that produces events from a function.
 ///

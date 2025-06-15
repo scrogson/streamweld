@@ -38,7 +38,7 @@ pub mod utils;
 
 // Re-export commonly used items
 pub mod prelude {
-    pub use crate::core::{Error, Processor, Result, Sink, SinkExt, Source, SourceExt};
+    pub use crate::core::{Error, Processor, Result, Sink, Source, SourceExt};
     pub use crate::pipeline::{
         dispatcher::{DispatchedPipeline, DispatchedPipelineBuilder, DispatcherSink},
         ConcurrentPipeline, Pipeline, PipelineConfig, PipelineExt,

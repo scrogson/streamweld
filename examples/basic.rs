@@ -1,8 +1,9 @@
 //! Basic usage examples for StreamWeld
 //!
-//! Run with: cargo run --example basic_usage
+//! Run with: cargo run --example basic
 
 use std::time::Duration;
+use streamweld::pipeline::Pipeline;
 use streamweld::prelude::*;
 
 /// Custom sink for Vec<i64>
@@ -11,6 +12,13 @@ struct DebugPrintSink;
 #[async_trait::async_trait]
 impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
+
+    async fn write_batch(&mut self, items: Vec<Self::Item>) -> streamweld::core::Result<()> {
+        for batch in items {
+            println!("Batch: {:?}", batch);
+        }
+        Ok(())
+    }
 
     async fn write(&mut self, item: Self::Item) -> streamweld::core::Result<()> {
         println!("Batch: {:?}", item);
@@ -68,7 +76,7 @@ async fn functional_example() -> Result<()> {
     });
 
     // Create a sink from a function
-    let sink = streamweld::utils::sink_from_fn(|item: String| async move {
+    let sink = streamweld::utils::into_fn(|item: String| async move {
         println!("Processed: {}", item.to_uppercase());
         Ok(())
     });
@@ -134,18 +142,22 @@ async fn batching_example() -> Result<()> {
     Ok(())
 }
 
-/// Example 7: Chaining sources
-async fn chaining_example() -> Result<()> {
-    println!("=== Chaining Sources ===");
+/// Example 7: Merging sources (replaces chaining)
+async fn merging_example() -> Result<()> {
+    println!("=== Merging Sources ===");
 
     let source1 = RangeSource::new(1..4);
     let source2 = RangeSource::new(10..13);
     let source3 = RangeSource::new(20..23);
 
-    let chained = source1.chain(source2).chain(source3);
+    // Use MergeSource instead of chain
+    let merged = MergeSource::new()
+        .add_source(source1)
+        .add_source(source2)
+        .add_source(source3);
 
-    Pipeline::new(chained, NoOpProcessor::<i64>::new())
-        .sink(PrintSink::with_prefix("Chained".to_string()))
+    Pipeline::new(merged, NoOpProcessor::<i64>::new())
+        .sink(PrintSink::with_prefix("Merged".to_string()))
         .await?;
 
     println!();
@@ -169,6 +181,29 @@ async fn combinators_example() -> Result<()> {
     Ok(())
 }
 
+/// Example 9: GenStage-style demand processing
+async fn demand_example() -> Result<()> {
+    println!("=== GenStage-style Demand Processing ===");
+
+    let mut source = RangeSource::new(1..21);
+
+    // Demonstrate explicit demand signaling
+    println!("Requesting 5 items:");
+    let batch1 = source.handle_demand(5).await?;
+    println!("Got: {:?}", batch1);
+
+    println!("Requesting 3 more items:");
+    let batch2 = source.handle_demand(3).await?;
+    println!("Got: {:?}", batch2);
+
+    println!("Requesting remaining items:");
+    let batch3 = source.handle_demand(20).await?;
+    println!("Got: {:?}", batch3);
+
+    println!();
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("StreamWeld Basic Usage Examples\n");
@@ -179,8 +214,9 @@ async fn main() -> Result<()> {
     collection_example().await?;
     rate_limit_example().await?;
     batching_example().await?;
-    chaining_example().await?;
+    merging_example().await?;
     combinators_example().await?;
+    demand_example().await?;
 
     println!("All basic examples completed successfully!");
     Ok(())

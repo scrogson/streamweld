@@ -1,7 +1,8 @@
 //! Pipeline orchestration and execution.
 //!
 //! This module provides the core pipeline abstraction that connects sources,
-//! processors, and sinks with configurable backpressure and concurrency control.
+//! processors, and sinks with configurable backpressure and demand-driven
+//! processing using GenStage-style batch handling.
 
 pub mod dispatcher;
 
@@ -21,6 +22,8 @@ pub struct PipelineConfig {
     pub max_concurrency: usize,
     /// Whether to fail fast on errors
     pub fail_fast: bool,
+    /// Demand batch size for efficient processing
+    pub demand_batch_size: usize,
 }
 
 impl Default for PipelineConfig {
@@ -30,12 +33,13 @@ impl Default for PipelineConfig {
             operation_timeout: Duration::from_secs(30),
             max_concurrency: 1,
             fail_fast: true,
+            demand_batch_size: 100, // GenStage-style batch processing
         }
     }
 }
 
 /// A pipeline connects sources, processors, and sinks with configurable
-/// backpressure and concurrency control.
+/// backpressure and demand-driven batch processing.
 pub struct Pipeline<P, R> {
     stage: P,
     processor: R,
@@ -64,6 +68,12 @@ where
         self
     }
 
+    /// Set the demand batch size for efficient processing
+    pub fn demand_batch_size(mut self, size: usize) -> Self {
+        self.config.demand_batch_size = size;
+        self
+    }
+
     /// Set the operation timeout
     pub fn operation_timeout(mut self, timeout: Duration) -> Self {
         self.config.operation_timeout = timeout;
@@ -82,7 +92,7 @@ where
         self
     }
 
-    /// Run the pipeline with a sink
+    /// Run the pipeline with a sink using demand-driven processing
     pub async fn sink<C>(self, sink: C) -> Result<()>
     where
         C: Sink<Item = R::Output> + Send + Sync + 'static,
@@ -99,14 +109,17 @@ where
             mut processor,
             config,
         } = self;
-        let fail_fast = config.fail_fast;
+        let _fail_fast = config.fail_fast;
+        let demand_size = config.demand_batch_size;
 
         loop {
-            let produce_result =
-                tokio::time::timeout(config.operation_timeout, source.next()).await;
+            // Use GenStage-style demand signaling for batch processing
+            let demand_result =
+                tokio::time::timeout(config.operation_timeout, source.handle_demand(demand_size))
+                    .await;
 
-            let result = match produce_result {
-                Ok(r) => r,
+            let items = match demand_result {
+                Ok(r) => r?,
                 Err(_) => {
                     return Err(Error::Timeout {
                         duration_ms: config.operation_timeout.as_millis() as u64,
@@ -114,45 +127,33 @@ where
                 }
             };
 
-            match result {
-                Ok(Some(item)) => {
-                    let process_result =
-                        tokio::time::timeout(config.operation_timeout, processor.process(item))
-                            .await;
-                    let outputs = match process_result {
-                        Ok(r) => r?,
-                        Err(_) => {
-                            return Err(Error::Timeout {
-                                duration_ms: config.operation_timeout.as_millis() as u64,
-                            })
-                        }
-                    };
-                    for output in outputs {
-                        sink.write(output).await?;
-                    }
+            if items.is_empty() {
+                // Source exhausted, process any final outputs
+                let final_outputs = processor.finish().await?;
+                if !final_outputs.is_empty() {
+                    sink.write_batch(final_outputs).await?;
                 }
-                Ok(None) => {
-                    let finish_result =
-                        tokio::time::timeout(config.operation_timeout, processor.finish()).await;
-                    let final_outputs = match finish_result {
-                        Ok(r) => r?,
-                        Err(_) => {
-                            return Err(Error::Timeout {
-                                duration_ms: config.operation_timeout.as_millis() as u64,
-                            })
-                        }
-                    };
-                    for output in final_outputs {
-                        sink.write(output).await?;
-                    }
-                    sink.finish().await?;
-                    break;
+                sink.finish().await?;
+                break;
+            }
+
+            // Process the batch of items
+            let process_result =
+                tokio::time::timeout(config.operation_timeout, processor.process_batch(items))
+                    .await;
+
+            let outputs = match process_result {
+                Ok(r) => r?,
+                Err(_) => {
+                    return Err(Error::Timeout {
+                        duration_ms: config.operation_timeout.as_millis() as u64,
+                    })
                 }
-                Err(e) => {
-                    if fail_fast {
-                        return Err(e);
-                    }
-                }
+            };
+
+            // Write outputs to sink in batch
+            if !outputs.is_empty() {
+                sink.write_batch(outputs).await?;
             }
         }
 
@@ -160,7 +161,7 @@ where
     }
 }
 
-/// A pipeline that runs source and sink concurrently
+/// A pipeline that runs source and sink concurrently with demand-driven processing
 pub struct ConcurrentPipeline<P, C> {
     source: P,
     sink: C,
@@ -188,6 +189,12 @@ where
         self
     }
 
+    /// Set the demand batch size
+    pub fn demand_batch_size(mut self, size: usize) -> Self {
+        self.config.demand_batch_size = size;
+        self
+    }
+
     /// Set the operation timeout
     pub fn operation_timeout(mut self, timeout: Duration) -> Self {
         self.config.operation_timeout = timeout;
@@ -206,14 +213,15 @@ where
         self
     }
 
-    /// Run the pipeline
+    /// Run the pipeline with demand-driven concurrent processing
     pub async fn run(self) -> Result<()> {
         let (tx, rx) = mpsc::channel(self.config.buffer_size);
         let fail_fast = self.config.fail_fast;
+        let demand_size = self.config.demand_batch_size;
         let ConcurrentPipeline { source, sink, .. } = self;
 
         let source_handle =
-            tokio::spawn(async move { Self::run_source(source, tx, fail_fast).await });
+            tokio::spawn(async move { Self::run_source(source, tx, fail_fast, demand_size).await });
 
         let sink_handle = tokio::spawn(async move { Self::run_sink(sink, rx, fail_fast).await });
 
@@ -226,15 +234,26 @@ where
         }
     }
 
-    async fn run_source(mut source: P, tx: mpsc::Sender<P::Item>, fail_fast: bool) -> Result<()> {
+    async fn run_source(
+        mut source: P,
+        tx: mpsc::Sender<P::Item>,
+        fail_fast: bool,
+        demand_size: usize,
+    ) -> Result<()> {
         loop {
-            match source.next().await {
-                Ok(Some(item)) => {
-                    if tx.send(item).await.is_err() {
-                        break;
+            match source.handle_demand(demand_size).await {
+                Ok(items) => {
+                    if items.is_empty() {
+                        break; // Source exhausted
+                    }
+
+                    // Send items individually to maintain backpressure
+                    for item in items {
+                        if tx.send(item).await.is_err() {
+                            return Ok(()); // Receiver closed
+                        }
                     }
                 }
-                Ok(None) => break,
                 Err(e) => {
                     if fail_fast {
                         return Err(e);
@@ -246,18 +265,32 @@ where
     }
 
     async fn run_sink(mut sink: C, mut rx: mpsc::Receiver<P::Item>, fail_fast: bool) -> Result<()> {
+        let mut batch = Vec::new();
+        let batch_size = 50; // Configurable batch size for sink processing
+
         while let Some(item) = rx.recv().await {
-            if let Err(e) = sink.write(item).await {
-                if fail_fast {
-                    return Err(e);
+            batch.push(item);
+
+            // Process batch when full or channel is empty (for low latency)
+            if batch.len() >= batch_size || rx.is_empty() {
+                if let Err(e) = sink.write_batch(std::mem::take(&mut batch)).await {
+                    if fail_fast {
+                        return Err(e);
+                    }
                 }
             }
         }
+
+        // Process any remaining items
+        if !batch.is_empty() {
+            sink.write_batch(batch).await?;
+        }
+
         sink.finish().await
     }
 }
 
-/// A stage that combines a source and processor
+/// A stage that combines a source and processor with demand-driven processing
 pub struct PipelineStage<P, R> {
     source: P,
     processor: R,
@@ -273,25 +306,35 @@ where
 {
     type Item = R::Output;
 
-    async fn next(&mut self) -> Result<Option<Self::Item>> {
-        match self.source.next().await? {
-            Some(item) => {
-                let outputs = self.processor.process(item).await?;
-                if outputs.is_empty() {
-                    self.next().await
-                } else {
-                    Ok(outputs.into_iter().next())
-                }
+    async fn handle_demand(&mut self, demand: usize) -> Result<Vec<Self::Item>> {
+        let mut outputs = Vec::new();
+        let mut requested = demand;
+
+        while outputs.len() < demand && requested > 0 {
+            // Request items from source
+            let items = self.source.handle_demand(requested).await?;
+
+            if items.is_empty() {
+                // Source exhausted, get final outputs
+                let final_outputs = self.processor.finish().await?;
+                outputs.extend(final_outputs);
+                break;
             }
-            None => {
-                let outputs = self.processor.finish().await?;
-                if outputs.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(outputs.into_iter().next())
-                }
-            }
+
+            // Process the batch
+            let processed = self.processor.process_batch(items).await?;
+            outputs.extend(processed);
+
+            // Adjust demand based on what we still need
+            requested = demand.saturating_sub(outputs.len());
         }
+
+        // Return up to the requested demand
+        if outputs.len() > demand {
+            outputs.truncate(demand);
+        }
+
+        Ok(outputs)
     }
 }
 

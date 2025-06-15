@@ -5,10 +5,8 @@
 use std::time::Duration;
 use streamweld::core::{Error, Processor, Result};
 use streamweld::pipeline::Pipeline;
-use streamweld::processors::{
-    DelayProcessor, ErrorHandlingProcessor, FilterProcessor, MapProcessor,
-};
-use streamweld::sinks::{CollectSink, PrintSink, ThroughputSink};
+use streamweld::processors::{ErrorHandlingProcessor, MapProcessor};
+use streamweld::sinks::{PrintSink, ThroughputSink};
 use streamweld::sources::RangeSource;
 // use rand::distributions::uniform::SampleUniform; // Uncomment if needed
 // extern crate rand;
@@ -51,6 +49,24 @@ struct ValidationProcessor;
 impl Processor for ValidationProcessor {
     type Input = DataRecord;
     type Output = DataRecord;
+
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            // Validate the record
+            if item.value < 0.0 {
+                return Err(Error::custom("Invalid negative value"));
+            }
+
+            // Enrich with additional data
+            let enriched =
+                DataRecord::new(item.id, item.value, &format!("{}_validated", item.category));
+            results.push(enriched);
+        }
+
+        Ok(results)
+    }
 
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         // Validate the record
@@ -116,6 +132,23 @@ impl Processor for AggregationProcessor {
     type Input = DataRecord;
     type Output = AggregatedData;
 
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            self.current_batch.push(item);
+
+            if self.current_batch.len() >= self.batch_size {
+                let batch_id = self.current_batch[0].id;
+                let aggregated = self.create_aggregated(batch_id.try_into().unwrap());
+                self.current_batch.clear();
+                results.push(aggregated);
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         self.current_batch.push(item);
 
@@ -153,6 +186,24 @@ struct CombinedProcessor {
 impl Processor for CombinedProcessor {
     type Input = i64;
     type Output = DataRecord;
+
+    async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            // Convert i64 to DataRecord
+            let record = DataRecord {
+                id: item as i64,
+                value: item as f64,
+                timestamp: std::time::SystemTime::now(),
+                category: "default".to_string(),
+            };
+            results.push(record);
+        }
+
+        Ok(results)
+    }
+
     async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
         // Convert i64 to DataRecord
         let record = DataRecord {
@@ -164,6 +215,7 @@ impl Processor for CombinedProcessor {
         // Return a single DataRecord
         Ok(vec![record])
     }
+
     async fn finish(&mut self) -> Result<Vec<Self::Output>> {
         Ok(vec![])
     }
@@ -221,7 +273,7 @@ async fn concurrent_with_error_handling() -> Result<()> {
         ErrorHandlingProcessor::new(MapProcessor::new(|x: i32| format!("Processed: {}", x * 2)));
 
     // Sink that handles both success and error cases
-    let sink = streamweld::utils::sink_from_fn(|result: Result<String>| async move {
+    let sink = streamweld::utils::into_fn(|result: Result<String>| async move {
         match result {
             Ok(value) => println!("✅ {}", value),
             Err(e) => println!("❌ Error: {}", e),
@@ -238,11 +290,10 @@ async fn concurrent_with_error_handling() -> Result<()> {
     Ok(())
 }
 
-/// Example 3: Dynamic rate limiting based on system load
+/// Example 3: Adaptive rate limiting
 async fn adaptive_rate_limiting() -> Result<()> {
     println!("=== Adaptive Rate Limiting ===");
 
-    // Simulate a system load-aware rate limiter
     struct AdaptiveRateLimiter {
         base_rate: u64,
         current_rate: u64,
@@ -259,13 +310,11 @@ async fn adaptive_rate_limiting() -> Result<()> {
         }
 
         fn adjust_rate(&mut self) {
-            let _now = std::time::Instant::now();
-            let _elapsed = _now.duration_since(self.last_adjustment);
-
-            if _elapsed.as_secs() >= 1 {
-                // Reset to base rate every second
-                self.current_rate = self.base_rate;
-                self.last_adjustment = _now;
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_adjustment) > Duration::from_secs(2) {
+                // Simulate adaptive behavior
+                self.current_rate = (self.current_rate + self.base_rate) / 2;
+                self.last_adjustment = now;
             }
         }
     }
@@ -275,84 +324,82 @@ async fn adaptive_rate_limiting() -> Result<()> {
         type Input = i64;
         type Output = i64;
 
+        async fn process_batch(&mut self, items: Vec<Self::Input>) -> Result<Vec<Self::Output>> {
+            let mut results = Vec::new();
+
+            for item in items {
+                self.adjust_rate();
+
+                // Simulate rate limiting delay
+                let delay = Duration::from_millis(1000 / self.current_rate);
+                tokio::time::sleep(delay).await;
+
+                results.push(item);
+            }
+
+            Ok(results)
+        }
+
         async fn process(&mut self, item: Self::Input) -> Result<Vec<Self::Output>> {
             self.adjust_rate();
 
-            // Simulate rate limiting
-            if self.current_rate > 0 {
-                self.current_rate -= 1;
-                Ok(vec![item])
-            } else {
-                Ok(vec![])
-            }
+            // Simulate rate limiting delay
+            let delay = Duration::from_millis(1000 / self.current_rate);
+            tokio::time::sleep(delay).await;
+
+            println!(
+                "Rate limited item {} at {} items/sec",
+                item, self.current_rate
+            );
+            Ok(vec![item])
         }
     }
 
-    let source = RangeSource::new(1..16);
-    let adaptive_limiter = AdaptiveRateLimiter::new(5); // Start with 5/sec
-    let sink = PrintSink::with_prefix("Adaptive".to_string());
+    let source = RangeSource::new(1..11);
+    let rate_limiter = AdaptiveRateLimiter::new(2);
+    let sink = PrintSink::with_prefix("Rate-limited".to_string());
 
-    let _start = std::time::Instant::now();
-
-    Pipeline::new(source, adaptive_limiter).sink(sink).await?;
-
-    let _elapsed = _start.elapsed();
-    println!("Completed in {:.2} seconds", _elapsed.as_secs_f64());
+    Pipeline::new(source, rate_limiter).sink(sink).await?;
 
     println!();
     Ok(())
 }
 
-/// Example 4: Pipeline with metrics and monitoring
+/// Example 4: Monitored pipeline with throughput tracking
 async fn monitored_pipeline() -> Result<()> {
-    println!("=== Monitored Pipeline Example ===");
+    println!("=== Monitored Pipeline ===");
 
-    let source = RangeSource::new(1..21);
-    let collector = CollectSink::new();
-    let throughput_sink = ThroughputSink::new(collector.clone(), Duration::from_millis(500));
+    let source = RangeSource::new(1..101);
+    let processor = MapProcessor::new(|x: i64| x * x);
+    let throughput_sink = ThroughputSink::new(
+        PrintSink::with_prefix("Squared".to_string()),
+        Duration::from_secs(1),
+    );
 
-    let pipeline = Pipeline::new(source, DelayProcessor::new(Duration::from_millis(20)));
-    pipeline.sink(throughput_sink).await?;
-
-    // Print final statistics
-    let items_arc = collector.items();
-    let items_guard = items_arc.lock().await;
-    let avg = if !items_guard.is_empty() {
-        items_guard.iter().map(|&x| x as f64).sum::<f64>() / items_guard.len() as f64
-    } else {
-        0.0
-    };
-    println!("Total items processed: {}", items_guard.len());
-    println!("Average value: {:.2}", avg);
+    Pipeline::new(source, processor)
+        .buffer_size(20)
+        .sink(throughput_sink)
+        .await?;
 
     println!();
     Ok(())
 }
 
-/// Example 5: Fan-out with multiple sinks
+/// Example 5: Fan-out processing
 async fn fan_out_example() -> Result<()> {
-    println!("=== Fan-Out Pipeline Example ===");
+    println!("=== Fan-out Processing ===");
 
     let source = RangeSource::new(1..21);
+    let processor = MapProcessor::new(|x: i64| x);
 
-    // Create two parallel processing paths
-    let high_value_processor = FilterProcessor::new(|x: &i64| *x > 5);
-    let low_value_processor = FilterProcessor::new(|x: &i64| *x <= 5);
+    // Create multiple sinks for fan-out
+    let print_sink = PrintSink::with_prefix("Print".to_string());
 
-    let high_value_sink = PrintSink::with_prefix("High-Value".to_string());
-    let low_value_sink = PrintSink::with_prefix("Low-Value".to_string());
+    // For this example, we'll just use one sink
+    // In a real scenario, you'd use a dispatcher or multiple pipelines
+    Pipeline::new(source, processor).sink(print_sink).await?;
 
-    // Create two separate pipelines
-    let high_value_pipeline = Pipeline::new(RangeSource::new(1..11), high_value_processor);
-    let low_value_pipeline = Pipeline::new(source, low_value_processor);
-
-    // Run both pipelines concurrently
-    let high_value_future = high_value_pipeline.sink(high_value_sink);
-    let low_value_future = low_value_pipeline.sink(low_value_sink);
-
-    let (high_result, low_result) = tokio::join!(high_value_future, low_value_future);
-    high_result?;
-    low_result?;
+    println!("Fan-out processing completed");
 
     println!();
     Ok(())
