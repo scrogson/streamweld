@@ -1,4 +1,4 @@
-//! Integration tests for the GenStage-inspired producer/consumer system
+//! Integration tests for the GenStage-inspired source/sink system
 
 use std::time::Duration;
 use streamweld::core::SourceExt;

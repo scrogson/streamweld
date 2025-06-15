@@ -72,7 +72,7 @@ struct CounterSource {
 impl Source for CounterSource {
     type Item = u64;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         if self.current <= self.max {
             let item = self.current;
             self.current += 1;
@@ -97,7 +97,7 @@ struct LogSink;
 impl Sink for LogSink {
     type Item = String;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         println!("Consumed: {}", item);
         Ok(())
     }

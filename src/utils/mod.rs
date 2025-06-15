@@ -48,7 +48,7 @@ where
 {
     type Item = T;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         (self.f)().await
     }
 }
@@ -86,7 +86,7 @@ where
 {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         (self.f)(item).await
     }
 }

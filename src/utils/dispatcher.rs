@@ -348,7 +348,7 @@ where
     {
         let handle = tokio::spawn(async move {
             while let Some(item) = receiver.recv().await {
-                sink.consume(item).await?;
+                sink.write(item).await?;
 
                 // Increase demand after consuming
                 {

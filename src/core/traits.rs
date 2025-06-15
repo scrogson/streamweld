@@ -26,7 +26,7 @@ use async_trait::async_trait;
 /// impl Source for CounterSource {
 ///     type Item = u64;
 ///
-///     async fn produce(&mut self) -> Result<Option<Self::Item>> {
+///     async fn next(&mut self) -> Result<Option<Self::Item>> {
 ///         if self.current <= self.max {
 ///             let item = self.current;
 ///             self.current += 1;
@@ -42,11 +42,11 @@ pub trait Source {
     /// The type of items this source generates
     type Item: Send + 'static;
 
-    /// Produce the next item, or None if the source is exhausted.
+    /// Get the next item, or None if the source is exhausted.
     ///
     /// This method should be cheap to call repeatedly and should handle
-    /// backpressure by only producing when called.
-    async fn produce(&mut self) -> Result<Option<Self::Item>>;
+    /// backpressure by only generating when called.
+    async fn next(&mut self) -> Result<Option<Self::Item>>;
 }
 
 /// A sink processes items from upstream.
@@ -66,8 +66,8 @@ pub trait Source {
 /// impl Sink for LogSink {
 ///     type Item = String;
 ///
-///     async fn consume(&mut self, item: Self::Item) -> Result<()> {
-///         println!("Consumed: {}", item);
+///     async fn write(&mut self, item: Self::Item) -> Result<()> {
+///         println!("Logged: {}", item);
 ///         Ok(())
 ///     }
 /// }
@@ -77,11 +77,11 @@ pub trait Sink {
     /// The type of items this sink accepts
     type Item: Send + 'static;
 
-    /// Process a single item.
+    /// Write a single item.
     ///
     /// This method should handle the item completely - if it returns Ok(()),
     /// the item is considered successfully processed.
-    async fn consume(&mut self, item: Self::Item) -> Result<()>;
+    async fn write(&mut self, item: Self::Item) -> Result<()>;
 
     /// Called when the upstream source is exhausted.
     ///
@@ -93,7 +93,7 @@ pub trait Sink {
 
 /// A processor transforms items (sink + source combined).
 ///
-/// This is equivalent to GenStage's producer_consumer - it consumes items
+/// This is equivalent to GenStage's source_sink - it consumes items
 /// from upstream, transforms them, and produces new items for downstream.
 ///
 /// # Examples
@@ -168,17 +168,17 @@ pub trait SinkExt: Sink + Sized {
 // For brevity, I'll define the types but implement them in the impls module
 
 pub struct Map<P, F> {
-    pub producer: P,
+    pub source: P,
     pub f: F,
 }
 
 pub struct Filter<P, F> {
-    pub producer: P,
+    pub source: P,
     pub predicate: F,
 }
 
 pub struct Take<P> {
-    pub producer: P,
+    pub source: P,
     pub remaining: usize,
 }
 
@@ -188,7 +188,7 @@ pub struct Chain<P1, P2> {
 }
 
 pub struct Contramap<C, F, T> {
-    pub consumer: C,
+    pub sink: C,
     pub f: F,
     pub _phantom: std::marker::PhantomData<T>,
 }
@@ -200,7 +200,7 @@ impl<P: Source> SourceExt for P {
         F: FnMut(Self::Item) -> U + Send,
         U: Send + 'static,
     {
-        Map { producer: self, f }
+        Map { source: self, f }
     }
 
     fn filter<F>(self, predicate: F) -> Filter<Self, F>
@@ -208,14 +208,14 @@ impl<P: Source> SourceExt for P {
         F: FnMut(&Self::Item) -> bool + Send,
     {
         Filter {
-            producer: self,
+            source: self,
             predicate,
         }
     }
 
     fn take(self, n: usize) -> Take<Self> {
         Take {
-            producer: self,
+            source: self,
             remaining: n,
         }
     }
@@ -238,7 +238,7 @@ impl<C: Sink> SinkExt for C {
         T: Send + 'static,
     {
         Contramap {
-            consumer: self,
+            sink: self,
             f,
             _phantom: std::marker::PhantomData,
         }

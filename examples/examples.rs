@@ -1,4 +1,4 @@
-//! Usage examples for the GenStage-inspired producer/consumer system.
+//! Usage examples for the GenStage-inspired source/sink system.
 
 use std::time::Duration;
 use streamweld::prelude::*;
@@ -91,7 +91,7 @@ struct DebugPrintSink;
 impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         println!("Batch: {:?}", item);
         Ok(())
     }

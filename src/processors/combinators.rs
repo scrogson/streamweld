@@ -15,8 +15,8 @@ where
 {
     type Item = U;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
-        match self.producer.produce().await? {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
+        match self.source.next().await? {
             Some(item) => Ok(Some((self.f)(item))),
             None => Ok(None),
         }
@@ -32,9 +32,9 @@ where
 {
     type Item = P::Item;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         loop {
-            match self.producer.produce().await? {
+            match self.source.next().await? {
                 Some(item) => {
                     if (self.predicate)(&item) {
                         return Ok(Some(item));
@@ -55,12 +55,12 @@ where
 {
     type Item = P::Item;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         if self.remaining == 0 {
             return Ok(None);
         }
 
-        match self.producer.produce().await? {
+        match self.source.next().await? {
             Some(item) => {
                 self.remaining -= 1;
                 Ok(Some(item))
@@ -79,18 +79,18 @@ where
 {
     type Item = P1::Item;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(ref mut first) = self.first {
-            match first.produce().await? {
+            match first.next().await? {
                 Some(item) => Ok(Some(item)),
                 None => {
-                    // First producer exhausted, switch to second
+                    // First source exhausted, switch to second
                     self.first = None;
-                    self.second.produce().await
+                    self.second.next().await
                 }
             }
         } else {
-            self.second.produce().await
+            self.second.next().await
         }
     }
 }
@@ -105,13 +105,13 @@ where
 {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         let mapped_item = (self.f)(item);
-        self.consumer.consume(mapped_item).await
+        self.sink.write(mapped_item).await
     }
 
     async fn finish(&mut self) -> Result<()> {
-        self.consumer.finish().await
+        self.sink.finish().await
     }
 }
 
@@ -123,11 +123,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_map_combinator() {
-        let producer = RangeSource::new(1..6);
-        let mut mapped = producer.map(|x| x * 2);
+        let source = RangeSource::new(1..6);
+        let mut mapped = source.map(|x| x * 2);
 
         let mut results = Vec::new();
-        while let Some(item) = mapped.produce().await.unwrap() {
+        while let Some(item) = mapped.next().await.unwrap() {
             results.push(item);
         }
 
@@ -136,11 +136,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_combinator() {
-        let producer = RangeSource::new(1..11);
-        let mut filtered = producer.filter(|x| x % 2 == 0);
+        let source = RangeSource::new(1..11);
+        let mut filtered = source.filter(|x| x % 2 == 0);
 
         let mut results = Vec::new();
-        while let Some(item) = filtered.produce().await.unwrap() {
+        while let Some(item) = filtered.next().await.unwrap() {
             results.push(item);
         }
 
@@ -149,11 +149,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_take_combinator() {
-        let producer = RangeSource::new(1..11);
-        let mut taken = producer.take(3);
+        let source = RangeSource::new(1..11);
+        let mut taken = source.take(3);
 
         let mut results = Vec::new();
-        while let Some(item) = taken.produce().await.unwrap() {
+        while let Some(item) = taken.next().await.unwrap() {
             results.push(item);
         }
 
@@ -162,12 +162,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chain_combinator() {
-        let producer1 = RangeSource::new(1..4);
-        let producer2 = RangeSource::new(4..7);
-        let mut chained = producer1.chain(producer2);
+        let source1 = RangeSource::new(1..4);
+        let source2 = RangeSource::new(4..7);
+        let mut chained = source1.chain(source2);
 
         let mut results = Vec::new();
-        while let Some(item) = chained.produce().await.unwrap() {
+        while let Some(item) = chained.next().await.unwrap() {
             results.push(item);
         }
 
@@ -176,14 +176,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_complex_combination() {
-        let producer = RangeSource::new(1..21);
-        let mut complex = producer
+        let source = RangeSource::new(1..21);
+        let mut complex = source
             .filter(|x| x % 2 == 0) // Even numbers
             .map(|x| x * 3) // Multiply by 3
             .take(3); // Take first 3
 
         let mut results = Vec::new();
-        while let Some(item) = complex.produce().await.unwrap() {
+        while let Some(item) = complex.next().await.unwrap() {
             results.push(item);
         }
 

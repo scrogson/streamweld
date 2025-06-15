@@ -11,13 +11,13 @@ use tokio::time::sleep;
 
 use crate::core::{Result, Source};
 
-/// A producer that generates numbers from a range
+/// A source that generates numbers from a range
 pub struct RangeSource {
     range: Range<i64>,
 }
 
 impl RangeSource {
-    /// Create a new range producer
+    /// Create a new range source
     pub fn new(range: Range<i64>) -> Self {
         Self { range }
     }
@@ -27,7 +27,7 @@ impl RangeSource {
 impl Source for RangeSource {
     type Item = i64;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(item) = self.range.next() {
             Ok(Some(item))
         } else {
@@ -36,25 +36,25 @@ impl Source for RangeSource {
     }
 }
 
-/// A producer that yields items from a vector
+/// A source that yields items from a vector
 pub struct VecSource<T> {
     items: VecDeque<T>,
 }
 
 impl<T> VecSource<T> {
-    /// Create a new vector producer
+    /// Create a new vector source
     pub fn new(items: Vec<T>) -> Self {
         Self {
             items: items.into(),
         }
     }
 
-    /// Add more items to the producer
+    /// Add more items to the source
     pub fn push(&mut self, item: T) {
         self.items.push_back(item);
     }
 
-    /// Check if the producer has more items
+    /// Check if the source has more items
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -69,19 +69,19 @@ impl<T> VecSource<T> {
 impl<T: Send + 'static> Source for VecSource<T> {
     type Item = T;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         Ok(self.items.pop_front())
     }
 }
 
-/// A producer that repeats a single value
+/// A source that repeats a single value
 pub struct RepeatSource<T> {
     value: T,
     remaining: Option<usize>,
 }
 
 impl<T: Clone> RepeatSource<T> {
-    /// Create a producer that repeats a value indefinitely
+    /// Create a source that repeats a value indefinitely
     pub fn new(value: T) -> Self {
         Self {
             value,
@@ -89,7 +89,7 @@ impl<T: Clone> RepeatSource<T> {
         }
     }
 
-    /// Create a producer that repeats a value n times
+    /// Create a source that repeats a value n times
     pub fn times(value: T, count: usize) -> Self {
         Self {
             value,
@@ -102,7 +102,7 @@ impl<T: Clone> RepeatSource<T> {
 impl<T: Clone + Send + 'static> Source for RepeatSource<T> {
     type Item = T;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         match self.remaining {
             Some(ref mut rem) => {
                 if *rem == 0 {
@@ -116,7 +116,7 @@ impl<T: Clone + Send + 'static> Source for RepeatSource<T> {
     }
 }
 
-/// A producer that generates items at timed intervals
+/// A source that generates items at timed intervals
 pub struct IntervalSource<P> {
     inner: P,
     interval: Duration,
@@ -124,7 +124,7 @@ pub struct IntervalSource<P> {
 }
 
 impl<P> IntervalSource<P> {
-    /// Create a new interval producer
+    /// Create a new interval source
     pub fn new(inner: P, interval: Duration) -> Self {
         Self {
             inner,
@@ -138,7 +138,7 @@ impl<P> IntervalSource<P> {
 impl<P: Source + Send> Source for IntervalSource<P> {
     type Item = P::Item;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         let now = Instant::now();
 
         if let Some(last) = self.last_produced {
@@ -148,13 +148,13 @@ impl<P: Source + Send> Source for IntervalSource<P> {
             }
         }
 
-        let result = self.inner.produce().await;
+        let result = self.inner.next().await;
         self.last_produced = Some(Instant::now());
         result
     }
 }
 
-/// A producer that chunks items from another producer
+/// A source that chunks items from another source
 pub struct ChunkSource<P: Source> {
     inner: P,
     chunk_size: usize,
@@ -162,7 +162,7 @@ pub struct ChunkSource<P: Source> {
 }
 
 impl<P: Source> ChunkSource<P> {
-    /// Create a new chunk producer
+    /// Create a new chunk source
     pub fn new(inner: P, chunk_size: usize) -> Self {
         Self {
             inner,
@@ -176,10 +176,10 @@ impl<P: Source> ChunkSource<P> {
 impl<P: Source + Send> Source for ChunkSource<P> {
     type Item = Vec<P::Item>;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
-        // Fill buffer until we have enough items or the inner producer is exhausted
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
+        // Fill buffer until we have enough items or the inner source is exhausted
         while self.buffer.len() < self.chunk_size {
-            match self.inner.produce().await? {
+            match self.inner.next().await? {
                 Some(item) => self.buffer.push(item),
                 None => break,
             }
@@ -196,34 +196,34 @@ impl<P: Source + Send> Source for ChunkSource<P> {
     }
 }
 
-/// A producer that merges items from multiple producers in round-robin fashion
+/// A source that merges items from multiple sources in round-robin fashion
 pub struct MergeSource<T> {
-    producers: Vec<Box<dyn Source<Item = T> + Send>>,
+    sources: Vec<Box<dyn Source<Item = T> + Send>>,
     current: usize,
     exhausted: Vec<bool>,
 }
 
 impl<T: Send + 'static> MergeSource<T> {
-    /// Create a new merge producer
+    /// Create a new merge source
     pub fn new() -> Self {
         Self {
-            producers: Vec::new(),
+            sources: Vec::new(),
             current: 0,
             exhausted: Vec::new(),
         }
     }
 
-    /// Add a producer to merge
-    pub fn add_producer<P>(mut self, producer: P) -> Self
+    /// Add a source to merge
+    pub fn add_source<P>(mut self, source: P) -> Self
     where
         P: Source<Item = T> + Send + 'static,
     {
-        self.producers.push(Box::new(producer));
+        self.sources.push(Box::new(source));
         self.exhausted.push(false);
         self
     }
 
-    /// Check if all producers are exhausted
+    /// Check if all sources are exhausted
     fn all_exhausted(&self) -> bool {
         self.exhausted.iter().all(|&x| x)
     }
@@ -233,8 +233,8 @@ impl<T: Send + 'static> MergeSource<T> {
 impl<T: Send + 'static> Source for MergeSource<T> {
     type Item = T;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
-        if self.producers.is_empty() || self.all_exhausted() {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
+        if self.sources.is_empty() || self.all_exhausted() {
             return Ok(None);
         }
 
@@ -242,10 +242,10 @@ impl<T: Send + 'static> Source for MergeSource<T> {
 
         loop {
             if !self.exhausted[self.current] {
-                match self.producers[self.current].produce().await? {
+                match self.sources[self.current].next().await? {
                     Some(item) => {
-                        // Move to next producer for round-robin
-                        self.current = (self.current + 1) % self.producers.len();
+                        // Move to next source for round-robin
+                        self.current = (self.current + 1) % self.sources.len();
                         return Ok(Some(item));
                     }
                     None => {
@@ -254,10 +254,10 @@ impl<T: Send + 'static> Source for MergeSource<T> {
                 }
             }
 
-            // Move to next producer
-            self.current = (self.current + 1) % self.producers.len();
+            // Move to next source
+            self.current = (self.current + 1) % self.sources.len();
 
-            // If we've gone through all producers once, check if all are exhausted
+            // If we've gone through all sources once, check if all are exhausted
             if self.current == start_index {
                 if self.all_exhausted() {
                     return Ok(None);
@@ -273,7 +273,7 @@ impl<T: Send + 'static> Default for MergeSource<T> {
     }
 }
 
-/// A producer that generates fibonacci numbers
+/// A source that generates fibonacci numbers
 pub struct FibonacciSource {
     a: u64,
     b: u64,
@@ -281,7 +281,7 @@ pub struct FibonacciSource {
 }
 
 impl FibonacciSource {
-    /// Create an infinite fibonacci producer
+    /// Create an infinite fibonacci source
     pub fn new() -> Self {
         Self {
             a: 0,
@@ -290,7 +290,7 @@ impl FibonacciSource {
         }
     }
 
-    /// Create a fibonacci producer with a limit
+    /// Create a fibonacci source with a limit
     pub fn with_limit(limit: usize) -> Self {
         Self {
             a: 0,
@@ -304,7 +304,7 @@ impl FibonacciSource {
 impl Source for FibonacciSource {
     type Item = u64;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
         if let Some(ref mut count) = self.count {
             if *count == 0 {
                 return Ok(None);

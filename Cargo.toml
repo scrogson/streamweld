@@ -3,19 +3,12 @@ name = "streamweld"
 version = "0.1.0"
 edition = "2021"
 authors = ["Sonny Scroggin <sonny@scrogg.in>"]
-description = "A GenStage-inspired producer/consumer system for Rust with demand-driven backpressure"
+description = "A GenStage-inspired source/sink system for Rust with demand-driven backpressure"
 documentation = "https://docs.rs/streamweld"
 homepage = "https://github.com/scrogson/streamweld"
 repository = "https://github.com/scrogson/streamweld"
 license = "MIT OR Apache-2.0"
-keywords = [
-    "async",
-    "stream",
-    "pipeline",
-    "backpressure",
-    "producer",
-    "consumer",
-]
+keywords = ["async", "stream", "pipeline", "backpressure", "source", "sink"]
 categories = ["asynchronous", "concurrency"]
 readme = "README.md"
 

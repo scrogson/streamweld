@@ -83,11 +83,11 @@ where
     }
 
     /// Run the pipeline with a sink
-    pub async fn sink<C>(self, consumer: C) -> Result<()>
+    pub async fn sink<C>(self, sink: C) -> Result<()>
     where
         C: Sink<Item = R::Output> + Send + Sync + 'static,
     {
-        self.run_with_sink(consumer).await
+        self.run_with_sink(sink).await
     }
 
     async fn run_with_sink<C>(self, mut sink: C) -> Result<()>
@@ -103,7 +103,7 @@ where
 
         loop {
             let produce_result =
-                tokio::time::timeout(config.operation_timeout, source.produce()).await;
+                tokio::time::timeout(config.operation_timeout, source.next()).await;
 
             let result = match produce_result {
                 Ok(r) => r,
@@ -128,7 +128,7 @@ where
                         }
                     };
                     for output in outputs {
-                        sink.consume(output).await?;
+                        sink.write(output).await?;
                     }
                 }
                 Ok(None) => {
@@ -143,7 +143,7 @@ where
                         }
                     };
                     for output in final_outputs {
-                        sink.consume(output).await?;
+                        sink.write(output).await?;
                     }
                     sink.finish().await?;
                     break;
@@ -228,7 +228,7 @@ where
 
     async fn run_source(mut source: P, tx: mpsc::Sender<P::Item>, fail_fast: bool) -> Result<()> {
         loop {
-            match source.produce().await {
+            match source.next().await {
                 Ok(Some(item)) => {
                     if tx.send(item).await.is_err() {
                         break;
@@ -247,7 +247,7 @@ where
 
     async fn run_sink(mut sink: C, mut rx: mpsc::Receiver<P::Item>, fail_fast: bool) -> Result<()> {
         while let Some(item) = rx.recv().await {
-            if let Err(e) = sink.consume(item).await {
+            if let Err(e) = sink.write(item).await {
                 if fail_fast {
                     return Err(e);
                 }
@@ -273,12 +273,12 @@ where
 {
     type Item = R::Output;
 
-    async fn produce(&mut self) -> Result<Option<Self::Item>> {
-        match self.source.produce().await? {
+    async fn next(&mut self) -> Result<Option<Self::Item>> {
+        match self.source.next().await? {
             Some(item) => {
                 let outputs = self.processor.process(item).await?;
                 if outputs.is_empty() {
-                    self.produce().await
+                    self.next().await
                 } else {
                     Ok(outputs.into_iter().next())
                 }

@@ -12,7 +12,7 @@ struct DebugPrintSink;
 impl streamweld::core::Sink for DebugPrintSink {
     type Item = Vec<i64>;
 
-    async fn consume(&mut self, item: Self::Item) -> streamweld::core::Result<()> {
+    async fn write(&mut self, item: Self::Item) -> streamweld::core::Result<()> {
         println!("Batch: {:?}", item);
         Ok(())
     }

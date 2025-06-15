@@ -14,8 +14,8 @@ async fn main() -> Result<()> {
     // Mermaid Diagram:
     // ```mermaid
     // graph TD
-    //     A["Source<br/>(Fast Producer)"] --> B["Buffer<br/>(Channel)"]
-    //     B --> C["Sink<br/>(Slow Consumer)"]
+    //     A["Source<br/>(Fast source)"] --> B["Buffer<br/>(Channel)"]
+    //     B --> C["Sink<br/>(Slow sink)"]
     //
     //     subgraph "Async Task 1"
     //         A

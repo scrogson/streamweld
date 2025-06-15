@@ -25,7 +25,7 @@ pub struct PrintSink<T> {
 }
 
 impl<T> PrintSink<T> {
-    /// Create a new print consumer
+    /// Create a new print sink
     pub fn new() -> Self {
         Self {
             prefix: None,
@@ -33,7 +33,7 @@ impl<T> PrintSink<T> {
         }
     }
 
-    /// Create a new print consumer with a prefix
+    /// Create a new print sink with a prefix
     pub fn with_prefix(prefix: String) -> Self {
         Self {
             prefix: Some(prefix),
@@ -46,7 +46,7 @@ impl<T> PrintSink<T> {
 impl<T: Send + 'static + Display> Sink for PrintSink<T> {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         match &self.prefix {
             Some(prefix) => println!("{}: {}", prefix, item),
             None => println!("{}", item),
@@ -74,7 +74,7 @@ pub struct CollectSink<T> {
 }
 
 impl<T: Send + 'static + Clone> CollectSink<T> {
-    /// Create a new collect consumer
+    /// Create a new collect sink
     pub fn new() -> Self {
         Self {
             items: Arc::new(TokioMutex::new(Vec::new())),
@@ -96,7 +96,7 @@ impl<T: Send + 'static + Clone> CollectSink<T> {
 impl<T: Send + 'static + Clone> Sink for CollectSink<T> {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         let mut items = self.items.lock().await;
         items.push(item);
         Ok(())
@@ -128,7 +128,7 @@ pub struct CountSink<T> {
 }
 
 impl<T> CountSink<T> {
-    /// Create a new count consumer
+    /// Create a new count sink
     pub fn new() -> Self {
         Self {
             count: Arc::new(TokioMutex::new(0)),
@@ -151,7 +151,7 @@ impl<T> CountSink<T> {
 impl<T: Send + 'static> Sink for CountSink<T> {
     type Item = T;
 
-    async fn consume(&mut self, _item: Self::Item) -> Result<()> {
+    async fn write(&mut self, _item: Self::Item) -> Result<()> {
         let mut count = self.count.lock().await;
         *count += 1;
         Ok(())
@@ -184,7 +184,7 @@ pub struct FileSink<T> {
 }
 
 impl<T> FileSink<T> {
-    /// Create a new file consumer
+    /// Create a new file sink
     pub async fn new<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let file = tokio::fs::File::create(path).await?;
         Ok(Self {
@@ -193,7 +193,7 @@ impl<T> FileSink<T> {
         })
     }
 
-    /// Create a file consumer that appends to existing file
+    /// Create a file sink that appends to existing file
     pub async fn append<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -211,7 +211,7 @@ impl<T> FileSink<T> {
 impl<T: Send + 'static + Display> Sink for FileSink<T> {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         self.writer
             .write_all(format!("{}\n", item).as_bytes())
             .await
@@ -236,7 +236,7 @@ where
     C: Sink<Item = Vec<T>>,
     T: Send + 'static,
 {
-    /// Create a new batch consumer
+    /// Create a new batch sink
     pub fn new(inner: C, batch_size: usize) -> Self {
         Self {
             inner,
@@ -249,7 +249,7 @@ where
     async fn process_batch(&mut self) -> Result<()> {
         if !self.batch.is_empty() {
             let batch = std::mem::take(&mut self.batch);
-            self.inner.consume(batch).await?;
+            self.inner.write(batch).await?;
         }
         Ok(())
     }
@@ -263,7 +263,7 @@ where
 {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         self.batch.push(item);
 
         if self.batch.len() >= self.batch_size {
@@ -291,7 +291,7 @@ pub struct ThroughputSink<C> {
 }
 
 impl<C> ThroughputSink<C> {
-    /// Create a new throughput consumer
+    /// Create a new throughput sink
     pub fn new(inner: C, report_interval: Duration) -> Self {
         Self {
             inner,
@@ -330,7 +330,7 @@ impl<C> ThroughputSink<C> {
 impl<C: Sink + Send> Sink for ThroughputSink<C> {
     type Item = C::Item;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         let now = Instant::now();
 
         if self.start_time.is_none() {
@@ -338,7 +338,7 @@ impl<C: Sink + Send> Sink for ThroughputSink<C> {
             self.last_report = Some(now);
         }
 
-        self.inner.consume(item).await?;
+        self.inner.write(item).await?;
         self.count += 1;
 
         if let Some(last_report) = self.last_report {
@@ -364,7 +364,7 @@ pub struct RateLimitedSink<C> {
 }
 
 impl<C> RateLimitedSink<C> {
-    /// Create a new rate limited consumer
+    /// Create a new rate limited sink
     pub fn new(inner: C, max_rate_per_second: u64) -> Self {
         let min_interval = Duration::from_nanos(1_000_000_000 / max_rate_per_second);
         Self {
@@ -379,7 +379,7 @@ impl<C> RateLimitedSink<C> {
 impl<C: Sink + Send> Sink for RateLimitedSink<C> {
     type Item = C::Item;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         let now = Instant::now();
 
         if let Some(last) = self.last_consumed {
@@ -389,7 +389,7 @@ impl<C: Sink + Send> Sink for RateLimitedSink<C> {
             }
         }
 
-        self.inner.consume(item).await?;
+        self.inner.write(item).await?;
         self.last_consumed = Some(Instant::now());
         Ok(())
     }
@@ -413,7 +413,7 @@ where
     F: Fn(&T) -> (K, V) + Send + 'static,
     T: Send + 'static,
 {
-    /// Create a new aggregate consumer
+    /// Create a new aggregate sink
     pub fn new(key_fn: F) -> Self {
         Self {
             map: Arc::new(TokioMutex::new(HashMap::new())),
@@ -445,7 +445,7 @@ where
 {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         let (key, value) = (self.key_fn)(&item);
         let mut map = self.map.lock().await;
         map.entry(key)

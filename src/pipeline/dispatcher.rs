@@ -1,4 +1,4 @@
-//! Integration between pipelines and dispatchers for multi-consumer patterns.
+//! Integration between pipelines and dispatchers for multi-sink patterns.
 
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ where
 impl<T: Send + 'static> Sink for DispatcherSink<T> {
     type Item = T;
 
-    async fn consume(&mut self, item: Self::Item) -> Result<()> {
+    async fn write(&mut self, item: Self::Item) -> Result<()> {
         self.batch.push(item);
 
         if self.batch.len() >= self.batch_size {
@@ -111,7 +111,7 @@ impl<T> DispatchedPipelineBuilder<T> {
         self
     }
 
-    /// Set max demand per consumer
+    /// Set max demand per sink
     pub fn max_demand(mut self, demand: usize) -> Self {
         self.dispatcher_builder = self.dispatcher_builder.max_demand(demand);
         self
@@ -167,7 +167,7 @@ mod tests {
 
         // Test consuming items
         for i in 1..=3 {
-            sink.consume(i).await.unwrap();
+            sink.write(i).await.unwrap();
         }
 
         // Test finish
