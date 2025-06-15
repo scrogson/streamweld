@@ -471,7 +471,7 @@ pub mod metrics {
 
         /// Get throughput metrics
         pub fn throughput(&self) -> Option<(f64, f64, f64)> {
-            let start = *self.start_time.lock().unwrap()?;
+            let start = (*self.start_time.lock().unwrap())?;
             let elapsed = start.elapsed().as_secs_f64();
 
             if elapsed > 0.0 {

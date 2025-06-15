@@ -51,12 +51,5 @@ pub mod prelude {
 // Re-export main error type
 pub use core::{Error, Result};
 
-// Feature flags for optional dependencies
-#[cfg(feature = "metrics")]
-pub mod metrics;
-
-#[cfg(feature = "tracing")]
-pub mod tracing_support;
-
 // Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
