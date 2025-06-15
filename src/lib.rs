@@ -49,7 +49,7 @@ pub mod prelude {
 }
 
 // Re-export main error type
-pub use core::{Error, Result};
+pub use crate::core::{Error, Result};
 
 // Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -810,6 +810,7 @@ dependencies = [
  "async-trait",
  "criterion",
  "futures",
+ "futures-core",
  "metrics",
  "serde",
  "tempfile",

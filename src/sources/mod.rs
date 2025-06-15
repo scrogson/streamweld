@@ -215,10 +215,8 @@ impl<P: Source + Send> Source for ChunkSource<P> {
         for _ in 0..demand {
             // Fill buffer until we have enough items or the inner source is exhausted
             while self.buffer.len() < self.chunk_size {
-                let inner_items = self
-                    .inner
-                    .handle_demand(self.chunk_size - self.buffer.len())
-                    .await?;
+                let needed = self.chunk_size - self.buffer.len();
+                let inner_items = self.inner.handle_demand(needed).await?;
                 if inner_items.is_empty() {
                     break; // Inner source exhausted
                 }

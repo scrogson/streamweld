@@ -13,6 +13,12 @@ use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+// Re-export futures_core types for documentation links
+#[doc(inline)]
+pub use futures_core::future::TryFuture;
+#[doc(inline)]
+pub use futures_core::stream::Stream as CoreStream;
+
 use crate::core::error::Result;
 use crate::core::traits::{Processor, Sink, Source};
 
