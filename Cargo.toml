@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 tokio = { version = "1.36.0", features = ["full"] }
 tokio-stream = "0.1.14"
-tokio-util = "0.7.10"
+tokio-util = "0.7.18"
 futures = "0.3.30"
 futures-core = "0.3.30"
 async-trait = "0.1.77"
